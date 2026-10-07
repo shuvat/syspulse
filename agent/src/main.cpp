@@ -1,38 +1,48 @@
-// Temporary main for Day 1 step 2: reads /proc once per second for two
-// samples and prints the parsed values. Will be replaced by the
-// collector/sender threads in a later step.
 #include <chrono>
+#include <cstdlib>
+#include <functional>
 #include <iostream>
+#include <string>
 #include <thread>
 
 #include "collector.h"
+#include "sender.h"
 
 using namespace syspulse;
 
-static std::optional<CpuTimes> read_cpu() {
-    auto text = read_file("/proc/stat");
-    return text ? parse_cpu_times(*text) : std::nullopt;
+namespace {
+
+constexpr std::size_t kQueueCapacity = 150;  // 5 minutes of samples at 2s.
+constexpr std::chrono::seconds kInterval{2};
+
+std::string env_or(const char* name, const std::string& fallback) {
+    const char* value = std::getenv(name);
+    return value ? value : fallback;
 }
 
+}  // namespace
+
 int main() {
-    auto cpu_prev = read_cpu();
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    auto cpu_cur = read_cpu();
+    const std::string host = env_or("AGENT_NAME", "agent");
 
-    auto mem_text = read_file("/proc/meminfo");
-    auto net_text = read_file("/proc/net/dev");
-    auto mem = mem_text ? parse_meminfo(*mem_text) : std::nullopt;
-    auto net = net_text ? parse_net_dev(*net_text) : std::nullopt;
+    ThreadSafeQueue<Sample> queue(kQueueCapacity);
+    StopFlag stop;
 
-    if (!cpu_prev || !cpu_cur || !mem || !net) {
-        std::cerr << "failed to read or parse /proc\n";
-        return 1;
-    }
+    // std::thread copies its arguments; std::ref passes a reference instead,
+    // so both threads share the same queue and stop flag.
+    std::thread collector(run_collector, host, std::ref(queue), std::ref(stop), kInterval);
+    std::thread sender(run_sender, std::ref(queue), std::ref(std::cout));
 
-    std::cout << "cpu_percent:  " << cpu_percent(*cpu_prev, *cpu_cur) << "\n"
-              << "mem_used_mb:  " << mem->used_mb << "\n"
-              << "mem_total_mb: " << mem->total_mb << "\n"
-              << "net_rx_bytes: " << net->rx_bytes << "\n"
-              << "net_tx_bytes: " << net->tx_bytes << "\n";
+    // Temporary: run for 10 seconds. Ctrl+C handling comes in the next step.
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+
+    // Shutdown order matters: stop the producer first, then close the queue,
+    // so the sender drains every sample that was already collected.
+    stop.request_stop();
+    collector.join();
+    queue.close();
+    sender.join();
+
+    std::cerr << "agent stopped, dropped samples: " << queue.dropped() << "\n";
     return 0;
 }

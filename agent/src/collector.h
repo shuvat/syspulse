@@ -1,10 +1,25 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
 
+#include "queue.h"
+#include "stop_flag.h"
+
 namespace syspulse {
+
+// One metrics sample, matching the wire format sent to the server.
+struct Sample {
+    std::string host;
+    int64_t ts = 0;  // Unix time in seconds.
+    double cpu_percent = 0.0;
+    uint64_t mem_used_mb = 0;
+    uint64_t mem_total_mb = 0;
+    uint64_t net_rx_bytes = 0;
+    uint64_t net_tx_bytes = 0;
+};
 
 // Cumulative CPU time counters from the first "cpu " line of /proc/stat,
 // measured in clock ticks (USER_HZ) since boot.
@@ -47,5 +62,10 @@ double cpu_percent(const CpuTimes& prev, const CpuTimes& cur);
 
 // Reads a whole file into a string. The only function here that touches disk.
 std::optional<std::string> read_file(const std::string& path);
+
+// Collector thread body: every `interval`, reads /proc and pushes a Sample.
+// Returns when `stop` is requested.
+void run_collector(const std::string& host, ThreadSafeQueue<Sample>& queue, StopFlag& stop,
+                   std::chrono::milliseconds interval);
 
 }  // namespace syspulse

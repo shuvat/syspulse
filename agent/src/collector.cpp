@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 namespace syspulse {
@@ -119,6 +120,60 @@ std::optional<std::string> read_file(const std::string& path) {
     std::ostringstream content;
     content << file.rdbuf();
     return content.str();
+}
+
+namespace {
+
+std::optional<CpuTimes> read_cpu_times() {
+    auto text = read_file("/proc/stat");
+    return text ? parse_cpu_times(*text) : std::nullopt;
+}
+
+std::optional<MemInfo> read_meminfo() {
+    auto text = read_file("/proc/meminfo");
+    return text ? parse_meminfo(*text) : std::nullopt;
+}
+
+std::optional<NetCounters> read_net_dev() {
+    auto text = read_file("/proc/net/dev");
+    return text ? parse_net_dev(*text) : std::nullopt;
+}
+
+int64_t unix_time_now() {
+    using namespace std::chrono;
+    return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
+}
+
+}  // namespace
+
+void run_collector(const std::string& host, ThreadSafeQueue<Sample>& queue, StopFlag& stop,
+                   std::chrono::milliseconds interval) {
+    // CPU % needs two readings, so the first one is only a baseline.
+    std::optional<CpuTimes> prev_cpu = read_cpu_times();
+
+    while (!stop.wait_for(interval)) {
+        auto cpu = read_cpu_times();
+        auto mem = read_meminfo();
+        auto net = read_net_dev();
+
+        if (!prev_cpu || !cpu || !mem || !net) {
+            std::cerr << "collector: failed to read /proc, skipping sample\n";
+            prev_cpu = cpu;
+            continue;
+        }
+
+        Sample sample;
+        sample.host = host;
+        sample.ts = unix_time_now();
+        sample.cpu_percent = cpu_percent(*prev_cpu, *cpu);
+        sample.mem_used_mb = mem->used_mb;
+        sample.mem_total_mb = mem->total_mb;
+        sample.net_rx_bytes = net->rx_bytes;
+        sample.net_tx_bytes = net->tx_bytes;
+        queue.push(std::move(sample));
+
+        prev_cpu = cpu;
+    }
 }
 
 }  // namespace syspulse
