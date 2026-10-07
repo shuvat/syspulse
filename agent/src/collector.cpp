@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <thread>
 
 namespace syspulse {
 
@@ -154,9 +155,46 @@ std::optional<std::string> read_file(const std::string& path) {
 
 namespace {
 
-std::optional<CpuTimes> read_cpu_times() {
-    auto text = read_file("/proc/stat");
-    return text ? parse_cpu_times(*text) : std::nullopt;
+// One cumulative CPU reading. CPU % is computed from the delta of two readings;
+// only the fields of the chosen CpuSource are filled in.
+struct CpuReading {
+    CpuTimes times;                                   // CpuSource::Proc
+    uint64_t usage_usec = 0;                          // CpuSource::Cgroup
+    std::chrono::steady_clock::time_point taken_at;  // CpuSource::Cgroup
+};
+
+std::optional<CpuReading> read_cpu(CpuSource source) {
+    CpuReading reading;
+    if (source == CpuSource::Proc) {
+        auto text = read_file("/proc/stat");
+        auto times = text ? parse_cpu_times(*text) : std::nullopt;
+        if (!times) {
+            return std::nullopt;
+        }
+        reading.times = *times;
+    } else {
+        auto text = read_file("/sys/fs/cgroup/cpu.stat");
+        auto usage = text ? parse_cgroup_cpu_usage(*text) : std::nullopt;
+        if (!usage) {
+            return std::nullopt;
+        }
+        reading.usage_usec = *usage;
+        // steady_clock, not system_clock: it never jumps (e.g. NTP adjustments),
+        // so the measured interval is always the real elapsed time.
+        reading.taken_at = std::chrono::steady_clock::now();
+    }
+    return reading;
+}
+
+double cpu_percent_between(CpuSource source, const CpuReading& prev, const CpuReading& cur) {
+    if (source == CpuSource::Proc) {
+        return cpu_percent(prev.times, cur.times);
+    }
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cur.taken_at - prev.taken_at);
+    // hardware_concurrency() may return 0 if unknown; cgroup_cpu_percent() then returns 0.
+    return cgroup_cpu_percent(prev.usage_usec, cur.usage_usec,
+                              static_cast<uint64_t>(elapsed.count()),
+                              std::thread::hardware_concurrency());
 }
 
 std::optional<MemInfo> read_meminfo() {
@@ -177,17 +215,17 @@ int64_t unix_time_now() {
 }  // namespace
 
 void run_collector(const std::string& host, ThreadSafeQueue<Sample>& queue, StopFlag& stop,
-                   std::chrono::milliseconds interval) {
+                   std::chrono::milliseconds interval, CpuSource cpu_source) {
     // CPU % needs two readings, so the first one is only a baseline.
-    std::optional<CpuTimes> prev_cpu = read_cpu_times();
+    std::optional<CpuReading> prev_cpu = read_cpu(cpu_source);
 
     while (!stop.wait_for(interval)) {
-        auto cpu = read_cpu_times();
+        auto cpu = read_cpu(cpu_source);
         auto mem = read_meminfo();
         auto net = read_net_dev();
 
         if (!prev_cpu || !cpu || !mem || !net) {
-            std::cerr << "collector: failed to read /proc, skipping sample\n";
+            std::cerr << "collector: failed to read CPU, memory or network stats, skipping sample\n";
             prev_cpu = cpu;
             continue;
         }
@@ -195,7 +233,7 @@ void run_collector(const std::string& host, ThreadSafeQueue<Sample>& queue, Stop
         Sample sample;
         sample.host = host;
         sample.ts = unix_time_now();
-        sample.cpu_percent = cpu_percent(*prev_cpu, *cpu);
+        sample.cpu_percent = cpu_percent_between(cpu_source, *prev_cpu, *cpu);
         sample.mem_used_mb = mem->used_mb;
         sample.mem_total_mb = mem->total_mb;
         sample.net_rx_bytes = net->rx_bytes;

@@ -35,6 +35,16 @@ std::optional<uint16_t> parse_port(const std::string& text) {
     return static_cast<uint16_t>(value);
 }
 
+std::optional<CpuSource> parse_cpu_source(const std::string& text) {
+    if (text == "proc") {
+        return CpuSource::Proc;
+    }
+    if (text == "cgroup") {
+        return CpuSource::Cgroup;
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 int main() {
@@ -49,6 +59,15 @@ int main() {
         return 1;
     }
     config.port = *port;
+
+    // "proc" (default): CPU of the whole machine. "cgroup": CPU of this
+    // container only; set in docker-compose.yml.
+    const std::string cpu_source_text = env_or("CPU_SOURCE", "proc");
+    auto cpu_source = parse_cpu_source(cpu_source_text);
+    if (!cpu_source) {
+        std::cerr << "invalid CPU_SOURCE (expected proc or cgroup): " << cpu_source_text << "\n";
+        return 1;
+    }
 
     // Block SIGINT/SIGTERM before starting threads. New threads inherit the
     // mask, so no thread is interrupted by these signals; instead, main
@@ -66,11 +85,12 @@ int main() {
 
     // std::thread copies its arguments; std::ref passes a reference instead,
     // so both threads share the same queue and stop flag.
-    std::thread collector(run_collector, agent_name, std::ref(queue), std::ref(stop), kInterval);
+    std::thread collector(run_collector, agent_name, std::ref(queue), std::ref(stop), kInterval,
+                          *cpu_source);
     std::thread sender(run_sender, std::ref(queue), std::ref(stop), config);
 
     std::cerr << "agent " << agent_name << " started, sending to " << config.host << ":"
-              << config.port << " (Ctrl+C to stop)\n";
+              << config.port << ", CPU source: " << cpu_source_text << " (Ctrl+C to stop)\n";
 
     int sig = 0;
     sigwait(&signals, &sig);

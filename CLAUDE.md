@@ -21,7 +21,7 @@ Docker, observability, and GDB/valgrind.
 - When I ask "why", answer the question - don't just rewrite the code.
 
 ## Environment
-- Windows 11 + WSL2, Ubuntu 24.04. All work happens inside WSL (`~/projects/syspulse`).
+- Windows 11 + WSL2, Ubuntu 24.04. All work happens inside WSL (`~/syspulse`).
 - g++ 13.3, CMake 3.28, GDB 15.1, valgrind 3.22, Python 3 (use a venv), Docker Desktop
   with WSL integration (Docker Compose v2), stress-ng installed.
 - VS Code connected via WSL extension; GitHub repo: github.com/shuvat/syspulse

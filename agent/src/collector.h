@@ -74,9 +74,13 @@ double cgroup_cpu_percent(uint64_t prev_usage_usec, uint64_t cur_usage_usec,
 // Reads a whole file into a string. The only function here that touches disk.
 std::optional<std::string> read_file(const std::string& path);
 
-// Collector thread body: every `interval`, reads /proc and pushes a Sample.
-// Returns when `stop` is requested.
+// Where CPU usage is measured. Proc: the whole machine (/proc/stat).
+// Cgroup: only this process's cgroup, i.e. its container (cgroup v2 cpu.stat).
+enum class CpuSource { Proc, Cgroup };
+
+// Collector thread body: every `interval`, reads /proc (and cpu.stat for
+// CpuSource::Cgroup) and pushes a Sample. Returns when `stop` is requested.
 void run_collector(const std::string& host, ThreadSafeQueue<Sample>& queue, StopFlag& stop,
-                   std::chrono::milliseconds interval);
+                   std::chrono::milliseconds interval, CpuSource cpu_source);
 
 }  // namespace syspulse
