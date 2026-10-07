@@ -43,7 +43,7 @@ Docker, observability, and GDB/valgrind.
    - Graceful shutdown on SIGINT/SIGTERM.
    - Parsing functions take `std::string` input (not file paths) so they are unit-testable.
    - Libraries: nlohmann/json, GoogleTest (both via CMake FetchContent).
-   - Config via env vars: SERVER_HOST, SERVER_PORT, AGENT_NAME.
+   - Config via env vars: SERVER_HOST, SERVER_PORT, AGENT_NAME, CPU_SOURCE (proc|cgroup).
 2. **server/** (Python): asyncio TCP ingest on port 9000 started inside FastAPI lifespan;
    REST API on port 8000; SQLModel/SQLAlchemy + PostgreSQL; anomaly rules as pure functions.
 3. **mcp_server/** (Python, official MCP SDK / FastMCP): tools that call the REST API.
@@ -107,7 +107,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] Multi-stage Dockerfile for agent; Dockerfile for server
 - [x] docker-compose.yml with healthcheck + depends_on + volume; 3 agents
 - [x] scripts/load_test.sh (CPU load in one agent) -> CPU anomaly appears
-- [ ] docs/architecture.md with a Mermaid diagram
+- [x] docs/architecture.md with a Mermaid diagram
 
 ### Day 4 - MCP server
 - [ ] FastMCP server with the 4 tools (clear docstrings)
@@ -135,11 +135,11 @@ Day 1 complete: C++ agent works end to end (verified against `nc -lk 9000`, incl
 and Ctrl+C). 33 GoogleTest tests pass, clean under ThreadSanitizer.
 Day 2 complete: Python server (ingest + REST + anomaly rules) works end to end with the real agent
 and PostgreSQL (CPU anomaly verified with stress-ng). 52 pytest tests pass.
-Day 3 in progress: Dockerfiles + full compose stack (db, server, agent-1..3) work end to end
-(`docker compose up -d --build --wait`).
-Agents measure per-container CPU (`CPU_SOURCE=cgroup`); `scripts/load_test.sh` passes
-(cpu_high for agent-1 only). 44 GoogleTest tests pass.
-Next: Day 3, step 4 - docs/architecture.md with a Mermaid diagram.
+Day 3 complete: full Compose stack (db, server, agent-1..3) works end to end
+(`docker compose up -d --build --wait`). Agents measure per-container CPU (`CPU_SOURCE=cgroup`);
+`scripts/load_test.sh` passes (cpu_high for agent-1 only). 44 GoogleTest tests pass.
+docs/ (architecture, decisions, debugging) updated for Day 3.
+Next: Day 4, step 1 - FastMCP server with the 4 tools.
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -178,3 +178,19 @@ Next: Day 3, step 4 - docs/architecture.md with a Mermaid diagram.
   silence (skip if an anomaly newer than `last_seen` exists).
 - Tests use a real PostgreSQL database `syspulse_test` (created by conftest);
   `TestClient(app)` without `with`, so the lifespan does not run.
+
+### Docker notes (decisions made during Day 3)
+- Run everything from the repo root: `docker compose up -d --build --wait`; `docker compose down`
+  (`-v` also deletes the database volume).
+- Agent image: multi-stage (`ubuntu:24.04` build -> `ubuntu:24.04` runtime with only the binary),
+  118MB. Server image: single stage `python:3.12-slim`. Both non-root, exec-form entrypoint.
+- Readiness chain via healthchecks + `depends_on: service_healthy`: db (`pg_isready`) -> server
+  (`/health` through `python -c urllib`, no curl in slim) -> agents.
+- Published only on localhost: 8000 (API), 5432 (DB). 9000 (ingest) is internal only.
+- Agents share a YAML anchor `x-agent`; `environment` has its own anchor (`<<` merge is shallow).
+- Load test: `./scripts/load_test.sh` (stack must be up). Wait ~30s between runs (edge-triggered
+  rule needs CPU to drop first). Values under load are 92-98%, close to the 90% threshold;
+  watch for flakiness in CI.
+- Windows `npx` (in PATH from /mnt/c) cannot read WSL paths, so mermaid-cli does not work here;
+  check Mermaid diagrams in the VS Code preview or on GitHub.
+

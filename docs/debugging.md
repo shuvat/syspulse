@@ -111,6 +111,54 @@ OSError: [Errno 98] error while attempting to bind on address ('127.0.0.1', 8000
 - Prevention: the query orders by `ts DESC, id DESC`; `id` follows insertion order. Covered by
   `test_same_timestamp_keeps_arrival_order`.
 
+## Docker: every agent reports the same CPU
+
+- Symptom (expected from theory, confirmed by checking the files): inside a container,
+  `/proc/stat` and `/proc/meminfo` show the whole machine (e.g. `mem_total_mb` was the full
+  7.8 GB of the WSL VM), while `/proc/net/dev` showed only the container's own traffic
+  (`net_rx_bytes: 820`). A load in one container would raise the CPU of all three agents.
+- Cause: containers share the kernel; `/proc/stat` is not namespaced, `/proc/net/dev` is
+  (network namespace).
+- Diagnosis inside a running agent:
+
+  ```bash
+  docker compose exec agent-1 sh -c 'cat /sys/fs/cgroup/cpu.stat; cat /sys/fs/cgroup/cpu.max; nproc'
+  ```
+
+  `usage_usec` is the container's own CPU time; `cpu.max` = `max 100000` means no CPU limit.
+- Fix: `CPU_SOURCE=cgroup` (see [decisions.md](decisions.md)). Verified with one busy loop
+  in agent-1: agent-1 reported 12.5% (one CPU out of 8), agent-2 and agent-3 stayed at 0%.
+
+## Docker: stress-ng fails silently in the agent container
+
+```
+aborting: temp-path '.' must be readable and writeable
+```
+
+- Symptom: the first load test run found no anomaly, and agent-1's CPU stayed at 0%.
+  The error above was hidden, because `docker compose exec -d` detaches and drops the output.
+- Cause: the container runs as the non-root user `agent` with the working directory `/`,
+  and stress-ng writes temporary files to the current directory by default.
+- Found by running the same command in the foreground (without `-d`).
+- Fix: `--temp-path /tmp`. Lesson: `exec -d` is fire-and-forget; the script now starts the
+  command with `&` instead, so errors reach the terminal.
+
+## Docker: agent image grew from 118MB to 457MB
+
+- Symptom: adding `stress-ng` to the runtime image (for the load test) added 340MB.
+- Diagnosis:
+
+  ```bash
+  docker history syspulse-agent-1                 # size per layer: the apt-get layer was 258MB
+  docker compose run --rm --no-deps --entrypoint sh agent-1 \
+      -c 'ls -S /usr/lib/x86_64-linux-gnu | head'  # largest libraries: libLLVM, libgallium (Mesa)
+  apt-cache depends stress-ng                      # libegl1, libgbm1 -> Mesa -> LLVM
+  ```
+
+- Cause: Ubuntu's stress-ng package has GPU stressors, so it depends on the graphics stack.
+  `--no-install-recommends` does not help, because these are hard dependencies.
+- Fix: stress-ng removed from the image; the load test uses one shell busy loop per CPU.
+
 ## GDB
 
 *(Day 6: breakpoints, `info threads`, `thread apply all bt`, planted bug.)*

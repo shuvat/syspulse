@@ -36,7 +36,8 @@
 
 ## Metric definitions
 - **CPU %** is computed from the difference between two `/proc/stat` readings, because the
-  counters are cumulative since boot. Idle time is `idle + iowait`.
+  counters are cumulative since boot. Inside a container the agent reads its cgroup instead
+  (see "Per-container CPU from cgroup v2" below). Idle time is `idle + iowait`.
   The math uses `double` and clamps to 0-100, because `iowait` can go backwards on Linux
   and unsigned subtraction would wrap around.
 - **Memory used** is `MemTotal - MemAvailable`, not `MemTotal - MemFree`. `MemFree` ignores
@@ -137,6 +138,40 @@
   test different behavior than production.
 - Tests use a separate `syspulse_test` database, emptied before each test. The cost is a
   dependency on a running PostgreSQL; CI will provide it as a service container.
+
+## Docker images: multi-stage for the agent, single stage for the server
+- Agent: the build stage (`ubuntu:24.04` + build-essential, CMake) compiles the binary; the
+  runtime stage is a clean `ubuntu:24.04` with only the binary copied in (118MB). Compilers
+  and sources never reach the running image: smaller, and less to attack.
+- Tests are not built in the image (`-DBUILD_TESTING=OFF`); they run in CI instead.
+- Server: one stage on `python:3.12-slim`, because nothing is compiled (`psycopg[binary]`
+  ships libpq in its wheel). `requirements.txt` is copied and installed before `app/`, so a
+  code change does not reinstall the dependencies (layer cache).
+- `.dockerignore` keeps the venv, tests and caches out of the build context.
+- Both images run as a non-root system user: reading `/proc`, connecting and listening on
+  ports above 1024 need no root.
+- Exec form (`CMD ["..."]`, not a shell string): the process is PID 1 and receives the
+  `SIGTERM` from `docker stop` directly, so the graceful shutdown code actually runs.
+  With a shell in between, the signal would go to the shell and the process would be killed
+  after 10 seconds.
+
+## Docker Compose: readiness, ports and naming
+- Services reach each other by service name (`db`, `server`) through Compose's internal DNS.
+  This is why `DATABASE_URL` uses `db` and not `localhost` (inside a container, `localhost`
+  is the container itself), and why the agent resolves `SERVER_HOST` with `getaddrinfo`.
+- `depends_on` with `condition: service_healthy`: plain `depends_on` only waits until a
+  container is *started*, not until the service inside is *ready*. Chain: `db` (`pg_isready`)
+  -> `server` (`GET /health`, which also checks the database) -> agents.
+- The server healthcheck uses `python -c "urllib.request.urlopen(...)"`, because the slim
+  image has no curl; `urlopen` raises on a 503, so the exit code is non-zero.
+- Published ports: only `127.0.0.1:8000` (API) and `127.0.0.1:5432` (database, for local
+  development), bound to localhost. Port 9000 is not published: only the agents use it,
+  over the internal network. Less exposed surface.
+- `restart: unless-stopped` on the server and the agents. The agents also reconnect on their
+  own, so a server restart needs no agent restart.
+- The three agents share one definition through a YAML anchor (`x-agent`). The `environment`
+  block has its own anchor, because the merge key `<<` is shallow: without it, an agent's
+  `environment` would replace the shared variables instead of adding `AGENT_NAME`.
 
 ## Per-container CPU from cgroup v2 (CPU_SOURCE)
 - Containers share the host kernel. Namespaces limit what a process sees, but `/proc/stat`
