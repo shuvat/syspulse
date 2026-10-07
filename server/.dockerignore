@@ -1,0 +1,9 @@
+# Only requirements.txt and app/ belong in the image.
+.venv/
+tests/
+# Patterns match from the context root; **/ matches at any depth.
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+requirements-dev.txt
+pyproject.toml
