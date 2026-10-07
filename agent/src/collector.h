@@ -60,6 +60,17 @@ std::optional<NetCounters> parse_net_dev(const std::string& proc_net_dev);
 // CPU usage in percent [0, 100] between two samples of /proc/stat.
 double cpu_percent(const CpuTimes& prev, const CpuTimes& cur);
 
+// Total CPU time (microseconds) used by a cgroup, from the "usage_usec" line of
+// a cgroup v2 cpu.stat file. Inside a container this covers only that container,
+// while /proc/stat always describes the whole machine.
+std::optional<uint64_t> parse_cgroup_cpu_usage(const std::string& cpu_stat);
+
+// CPU usage in percent [0, 100] of the whole machine (all `num_cpus` CPUs)
+// between two cpu.stat readings taken `elapsed_usec` apart. Same scale as
+// cpu_percent(): 100 means every CPU was busy for the whole interval.
+double cgroup_cpu_percent(uint64_t prev_usage_usec, uint64_t cur_usage_usec,
+                          uint64_t elapsed_usec, unsigned num_cpus);
+
 // Reads a whole file into a string. The only function here that touches disk.
 std::optional<std::string> read_file(const std::string& path);
 

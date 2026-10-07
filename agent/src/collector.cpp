@@ -42,6 +42,36 @@ double cpu_percent(const CpuTimes& prev, const CpuTimes& cur) {
     return std::clamp(percent, 0.0, 100.0);
 }
 
+std::optional<uint64_t> parse_cgroup_cpu_usage(const std::string& cpu_stat) {
+    // Format: one "key value" pair per line, e.g. "usage_usec 251643".
+    std::istringstream input(cpu_stat);
+    std::string line;
+    while (std::getline(input, line)) {
+        std::istringstream fields(line);
+        std::string key;
+        uint64_t value = 0;
+        if (fields >> key >> value && key == "usage_usec") {
+            return value;
+        }
+    }
+    return std::nullopt;
+}
+
+double cgroup_cpu_percent(uint64_t prev_usage_usec, uint64_t cur_usage_usec,
+                          uint64_t elapsed_usec, unsigned num_cpus) {
+    // No interval, no CPUs, or a counter that went backwards (e.g. the cgroup
+    // was recreated): there is nothing meaningful to measure.
+    if (elapsed_usec == 0 || num_cpus == 0 || cur_usage_usec < prev_usage_usec) {
+        return 0.0;
+    }
+    // The CPU time available in the interval is wall time on every CPU.
+    double used = static_cast<double>(cur_usage_usec - prev_usage_usec);
+    double available = static_cast<double>(elapsed_usec) * num_cpus;
+    // Clamp: the two readings and the wall clock are not taken at exactly the
+    // same instant, so the ratio can slightly exceed 100%.
+    return std::clamp(used / available * 100.0, 0.0, 100.0);
+}
+
 std::optional<MemInfo> parse_meminfo(const std::string& proc_meminfo) {
     std::istringstream input(proc_meminfo);
     std::string line;

@@ -79,6 +79,64 @@ TEST(CpuPercent, StaysInRangeWhenIowaitGoesBackwards) {
     EXPECT_DOUBLE_EQ(cpu_percent(prev, cur), 100.0);
 }
 
+// ---------- cgroup v2 cpu.stat ----------
+
+TEST(ParseCgroupCpuUsage, ReadsUsageUsec) {
+    // Real format from /sys/fs/cgroup/cpu.stat inside a container.
+    const std::string text =
+        "usage_usec 251643\n"
+        "user_usec 83881\n"
+        "system_usec 167762\n"
+        "nr_periods 0\n";
+
+    auto usage = parse_cgroup_cpu_usage(text);
+
+    ASSERT_TRUE(usage.has_value());
+    EXPECT_EQ(*usage, 251643u);
+}
+
+TEST(ParseCgroupCpuUsage, FindsUsageUsecOnAnyLine) {
+    EXPECT_EQ(parse_cgroup_cpu_usage("user_usec 5\nusage_usec 42\n"), 42u);
+}
+
+TEST(ParseCgroupCpuUsage, ReturnsNulloptOnEmptyInput) {
+    EXPECT_FALSE(parse_cgroup_cpu_usage("").has_value());
+}
+
+TEST(ParseCgroupCpuUsage, ReturnsNulloptWithoutUsageUsec) {
+    EXPECT_FALSE(parse_cgroup_cpu_usage("user_usec 5\nsystem_usec 7\n").has_value());
+}
+
+TEST(ParseCgroupCpuUsage, ReturnsNulloptOnNonNumericValue) {
+    EXPECT_FALSE(parse_cgroup_cpu_usage("usage_usec abc\n").has_value());
+}
+
+// ---------- cgroup_cpu_percent ----------
+
+TEST(CgroupCpuPercent, ComputesShareOfAllCpus) {
+    // 2s on 4 CPUs = 8s of CPU time available; 2s used -> 25%.
+    EXPECT_DOUBLE_EQ(cgroup_cpu_percent(1'000'000, 3'000'000, 2'000'000, 4), 25.0);
+}
+
+TEST(CgroupCpuPercent, OneBusyCpuOutOfEight) {
+    // A single-threaded busy loop on an 8-CPU machine.
+    EXPECT_DOUBLE_EQ(cgroup_cpu_percent(0, 2'000'000, 2'000'000, 8), 12.5);
+}
+
+TEST(CgroupCpuPercent, ClampsToHundred) {
+    // Slightly more usage than wall time (readings are not simultaneous).
+    EXPECT_DOUBLE_EQ(cgroup_cpu_percent(0, 2'100'000, 1'000'000, 2), 100.0);
+}
+
+TEST(CgroupCpuPercent, ReturnsZeroWhenCounterGoesBackwards) {
+    EXPECT_DOUBLE_EQ(cgroup_cpu_percent(5'000'000, 1'000'000, 2'000'000, 4), 0.0);
+}
+
+TEST(CgroupCpuPercent, ReturnsZeroWithoutElapsedTimeOrCpus) {
+    EXPECT_DOUBLE_EQ(cgroup_cpu_percent(0, 1'000'000, 0, 4), 0.0);
+    EXPECT_DOUBLE_EQ(cgroup_cpu_percent(0, 1'000'000, 2'000'000, 0), 0.0);
+}
+
 // ---------- /proc/meminfo ----------
 
 TEST(ParseMeminfo, ComputesUsedFromAvailable) {
