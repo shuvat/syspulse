@@ -106,7 +106,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 ### Day 3 - Docker Compose + load test
 - [x] Multi-stage Dockerfile for agent; Dockerfile for server
 - [x] docker-compose.yml with healthcheck + depends_on + volume; 3 agents
-- [ ] scripts/load_test.sh (stress-ng in one agent) -> CPU anomaly appears
+- [x] scripts/load_test.sh (CPU load in one agent) -> CPU anomaly appears
 - [ ] docs/architecture.md with a Mermaid diagram
 
 ### Day 4 - MCP server
@@ -137,7 +137,9 @@ Day 2 complete: Python server (ingest + REST + anomaly rules) works end to end w
 and PostgreSQL (CPU anomaly verified with stress-ng). 52 pytest tests pass.
 Day 3 in progress: Dockerfiles + full compose stack (db, server, agent-1..3) work end to end
 (`docker compose up -d --build --wait`).
-Next: Day 3, step 3 - scripts/load_test.sh (stress-ng in one agent).
+Agents measure per-container CPU (`CPU_SOURCE=cgroup`); `scripts/load_test.sh` passes
+(cpu_high for agent-1 only). 44 GoogleTest tests pass.
+Next: Day 3, step 4 - docs/architecture.md with a Mermaid diagram.
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -150,6 +152,10 @@ Next: Day 3, step 3 - scripts/load_test.sh (stress-ng in one agent).
 - Dependencies (pinned, FetchContent): nlohmann/json v3.12.0, GoogleTest v1.17.0 (gmock off).
 - `gtest_discover_tests` uses `DISCOVERY_MODE PRE_TEST`.
 - TSan on this WSL kernel needs ASLR off: `setarch -R ./build-tsan/agent_tests`.
+- `CPU_SOURCE=proc|cgroup` (default proc). cgroup mode reads `/sys/fs/cgroup/cpu.stat`
+  (`usage_usec`) and divides by elapsed `steady_clock` time x `hardware_concurrency()`.
+  Memory still comes from `/proc/meminfo` (whole machine).
+- Load test uses shell busy loops, not stress-ng: stress-ng in the image added ~340MB (Mesa/LLVM).
 
 ### Server notes (decisions made during Day 2)
 - Run from `server/` with the venv: `uvicorn app.main:app --port 8000`; DB: `docker compose up -d --wait db`.

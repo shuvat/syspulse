@@ -138,5 +138,33 @@
 - Tests use a separate `syspulse_test` database, emptied before each test. The cost is a
   dependency on a running PostgreSQL; CI will provide it as a service container.
 
+## Per-container CPU from cgroup v2 (CPU_SOURCE)
+- Containers share the host kernel. Namespaces limit what a process sees, but `/proc/stat`
+  and `/proc/meminfo` are not namespaced: inside a container they describe the whole machine.
+  `/proc/net/dev` is per network namespace, so network counters were already per container.
+- Per-container CPU accounting lives in the container's cgroup: `/sys/fs/cgroup/cpu.stat`,
+  field `usage_usec` (the same source `docker stats` uses). With cgroup v2 the cgroup
+  namespace is private by default, so that path is the container's own cgroup.
+- `CPU_SOURCE=cgroup` (set in docker-compose.yml): `cpu% = delta usage_usec /
+  (elapsed wall time x number of CPUs) x 100`, elapsed time from `steady_clock`. Same scale
+  as `/proc/stat` (100 = every CPU busy), so the anomaly rule keeps its meaning.
+  `docker stats` uses another scale (200% = two busy cores).
+- `CPU_SOURCE=proc` stays the default, so the agent on a bare machine behaves as before.
+  Explicit config, not auto-detection, so behavior is predictable.
+- Why: with `/proc/stat` a load in one container raised the CPU of all three agents, so
+  "which host is overloaded?" had no meaningful answer.
+- Known limits: memory still comes from `/proc/meminfo` (whole machine); a container with a
+  CPU limit (`cpu.max` other than `max`) would need percent relative to its quota.
+
+## Load test without stress-ng in the image
+- The load must run inside agent-1, because agent-1 measures only its own cgroup.
+- Installing stress-ng in the agent image grew it from 118MB to 457MB: on Ubuntu it depends
+  on `libegl1`/`libgbm1` (GPU stressors), which pull in Mesa and LLVM.
+- `scripts/load_test.sh` instead starts one shell busy loop per CPU in agent-1 (what
+  `stress-ng --cpu 0` does for our purpose). No new dependency, image stays at 118MB.
+- Measured during the load: 92-98% (the rest of the stack also uses some CPU), so the test
+  sits close to the 90% threshold. The script polls for 30s, so a single dip below 90% only
+  delays the anomaly. Watch this in CI, where runners have fewer CPUs.
+
 ## AI integration: MCP server
 - Why: (fill in on Day 4)
