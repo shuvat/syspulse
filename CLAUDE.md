@@ -104,8 +104,8 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] anomalies.py (pure functions) + pytest (rules, parsing, endpoints via TestClient)
 
 ### Day 3 - Docker Compose + load test
-- [ ] Multi-stage Dockerfile for agent; Dockerfile for server
-- [ ] docker-compose.yml with healthcheck + depends_on + volume; 3 agents
+- [x] Multi-stage Dockerfile for agent; Dockerfile for server
+- [x] docker-compose.yml with healthcheck + depends_on + volume; 3 agents
 - [ ] scripts/load_test.sh (stress-ng in one agent) -> CPU anomaly appears
 - [ ] docs/architecture.md with a Mermaid diagram
 
@@ -135,7 +135,9 @@ Day 1 complete: C++ agent works end to end (verified against `nc -lk 9000`, incl
 and Ctrl+C). 33 GoogleTest tests pass, clean under ThreadSanitizer.
 Day 2 complete: Python server (ingest + REST + anomaly rules) works end to end with the real agent
 and PostgreSQL (CPU anomaly verified with stress-ng). 52 pytest tests pass.
-Next: Day 3, step 1 - multi-stage Dockerfile for the agent.
+Day 3 in progress: Dockerfiles + full compose stack (db, server, agent-1..3) work end to end
+(`docker compose up -d --build --wait`).
+Next: Day 3, step 3 - scripts/load_test.sh (stress-ng in one agent).
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
