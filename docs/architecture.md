@@ -3,8 +3,8 @@
 SysPulse collects system metrics from Linux hosts, stores them in PostgreSQL,
 detects anomalies, and exposes the data to a dashboard and to an LLM through MCP.
 
-> Status: the C++ agent and the Python server are implemented. The MCP server,
-> the dashboard and Docker Compose for the full system are planned (marked *planned* below).
+> Status: the C++ agent, the Python server and the Docker Compose deployment (with a load
+> test) are implemented. The MCP server and the dashboard are planned (marked *planned* below).
 
 ## Overview
 
@@ -40,7 +40,8 @@ flowchart LR
 
 ## Data flow
 
-1. Each agent samples `/proc` every 2 seconds and sends one JSON object per line over TCP.
+1. Each agent samples `/proc` (and, in a container, its cgroup's CPU usage) every 2 seconds
+   and sends one JSON object per line over TCP.
 2. The ingest server validates each line, upserts the host, stores the metric and runs the
    CPU and memory anomaly rules, all in one transaction.
 3. A background task checks every 5 seconds for hosts that went silent.
@@ -59,7 +60,7 @@ One JSON object per line (`\n`-terminated):
 |---|---|
 | `host` | Agent name (`AGENT_NAME`) |
 | `ts` | Unix time in seconds when the sample was taken |
-| `cpu_percent` | CPU busy share since the previous sample, 0-100 |
+| `cpu_percent` | CPU busy share since the previous sample, 0-100 (100 = every CPU busy). Whole machine (`/proc/stat`) or only the agent's container (cgroup), see `CPU_SOURCE` |
 | `mem_used_mb` / `mem_total_mb` | `MemTotal - MemAvailable` / `MemTotal` from `/proc/meminfo` |
 | `net_rx_bytes` / `net_tx_bytes` | Cumulative byte counters, summed over all interfaces except `lo` |
 
@@ -69,7 +70,7 @@ Network counters are cumulative; rates are computed by the readers from consecut
 
 ```mermaid
 flowchart LR
-    PROC[/proc/stat<br/>/proc/meminfo<br/>/proc/net/dev/]
+    PROC[/proc/stat or cgroup cpu.stat<br/>/proc/meminfo<br/>/proc/net/dev/]
     C[Collector thread<br/>every 2s]
     Q[[ThreadSafeQueue&lt;Sample&gt;<br/>bounded, 150]]
     S[Sender thread<br/>TCP + reconnect]
@@ -87,7 +88,7 @@ flowchart LR
 
 | File | Responsibility |
 |---|---|
-| `src/collector.{h,cpp}` | Pure parsers for `/proc` (take `std::string`, return `std::optional`), `cpu_percent`, `read_file`, collector thread |
+| `src/collector.{h,cpp}` | Pure parsers for `/proc` and cgroup `cpu.stat` (take `std::string`, return `std::optional`), `cpu_percent`, `cgroup_cpu_percent`, `read_file`, collector thread |
 | `src/sender.{h,cpp}` | `to_json`, RAII `Socket`, `connect_to`, `send_all`, `next_backoff`, sender thread |
 | `src/queue.h` | `ThreadSafeQueue<T>`: bounded, `std::mutex` + `std::condition_variable`, `close()` for shutdown |
 | `src/stop_flag.h` | `StopFlag`: a stop request that sleeping threads can wait on |
@@ -119,6 +120,22 @@ The producer is stopped before the queue is closed, so no collected sample is re
 | `AGENT_NAME` | `agent` | Value of the `host` field |
 | `SERVER_HOST` | `127.0.0.1` | Server name or IP (resolved with `getaddrinfo`) |
 | `SERVER_PORT` | `9000` | Server TCP port (1-65535; invalid values exit with an error) |
+| `CPU_SOURCE` | `proc` | `proc`: CPU of the whole machine. `cgroup`: CPU of this container only (invalid values exit with an error) |
+
+### CPU inside a container
+
+Containers share the host kernel. Namespaces limit what a process *sees*, but `/proc/stat`
+and `/proc/meminfo` are not namespaced: inside a container they describe the whole machine
+(`/proc/net/dev` is per network namespace, so network counters are already per container).
+CPU time used by one container is accounted in its cgroup, in `/sys/fs/cgroup/cpu.stat`
+(`usage_usec`). With `CPU_SOURCE=cgroup` (set in `docker-compose.yml`) the agent computes:
+
+```
+cpu_percent = delta usage_usec / (elapsed steady_clock time x number of CPUs) x 100
+```
+
+This is the same scale as `/proc/stat`, so the anomaly rule keeps its meaning. Memory still
+comes from `/proc/meminfo`. See `decisions.md` for the trade-offs.
 
 ### Build and tests
 
@@ -131,7 +148,8 @@ ctest --test-dir build --output-on-failure
 Dependencies are fetched with CMake `FetchContent` and pinned to releases:
 nlohmann/json v3.12.0 and GoogleTest v1.17.0 (tests only; `-DBUILD_TESTING=OFF` skips them).
 
-The test suite covers the parsers (including malformed input), `cpu_percent` edge cases,
+The test suite covers the parsers (including malformed input), `cpu_percent` and
+`cgroup_cpu_percent` edge cases, the collector thread with both CPU sources,
 the queue and stop flag under concurrency, JSON serialization, and the sender against a
 real local TCP server (send, reconnect, prompt shutdown while the server is down).
 
@@ -240,3 +258,66 @@ pytest -v
 Tests run against a separate database, `syspulse_test`, which the test setup creates and
 empties before each test. They cover the anomaly rules (pure), line parsing, storing samples
 and anomalies, the silence watcher with a controlled clock, and every REST endpoint.
+
+## Deployment (Docker Compose)
+
+`docker-compose.yml` runs the whole system: PostgreSQL, the server and three agents.
+
+```mermaid
+flowchart LR
+    USER[Browser / curl / MCP<br/>on the host machine]
+
+    subgraph net[Compose network - services reach each other by name]
+        A1[agent-1]
+        A2[agent-2]
+        A3[agent-3]
+        SRV[server<br/>:8000 REST, :9000 ingest]
+        DB[(db<br/>PostgreSQL 17)]
+    end
+
+    VOL[(volume pgdata)]
+
+    A1 & A2 & A3 -- "server:9000" --> SRV
+    SRV -- "db:5432" --> DB
+    DB --- VOL
+    USER -- "127.0.0.1:8000" --> SRV
+```
+
+- **Ports**: only `127.0.0.1:8000` (REST API) and `127.0.0.1:5432` (database, for local
+  development) are published, and only on localhost. Port 9000 is not published: only the
+  agents use it, over the internal network.
+- **Startup order**: `depends_on` with `condition: service_healthy` waits until a service is
+  *ready*, not only started: `db` (`pg_isready`) -> `server` (`GET /health`, which also
+  checks the database) -> agents. `restart: unless-stopped` on the server and the agents.
+- **Data**: the `pgdata` volume keeps the database across `docker compose down`;
+  `docker compose down -v` deletes it (needed after a model change, as there are no migrations).
+- **Agents**: one shared definition (YAML anchor `x-agent`), each with its own `AGENT_NAME`
+  and `CPU_SOURCE=cgroup`.
+
+### Images
+
+| Image | Build | Notes |
+|---|---|---|
+| agent | Multi-stage: `ubuntu:24.04` + build tools -> `ubuntu:24.04` with only the binary | 118MB; compilers stay in the build stage |
+| server | Single stage: `python:3.12-slim` | Nothing is compiled (`psycopg[binary]` ships libpq); dependencies are installed before the code is copied, so that layer stays cached |
+
+Both run as a non-root user and start the process in exec form, so it is PID 1 and receives
+the `SIGTERM` from `docker stop` directly.
+
+### Load test
+
+`scripts/load_test.sh` starts one busy loop per CPU inside agent-1 for 30 seconds and polls
+`GET /anomalies` until a `cpu_high` anomaly appears. It passes only if the anomaly is
+reported for agent-1 **and not** for agent-2 or agent-3, which shows that each agent measures
+its own container. Only anomalies newer than the start of the run count, so results of
+earlier runs cannot make it pass. With the 2-second interval and the 3-sample rule, the
+anomaly appears after about 10 seconds.
+
+### Run the full system
+
+```bash
+docker compose up -d --build --wait
+curl -s localhost:8000/hosts
+./scripts/load_test.sh
+docker compose down          # add -v to also delete the database
+```
