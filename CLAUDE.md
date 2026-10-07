@@ -30,7 +30,7 @@ Docker, observability, and GDB/valgrind.
 ```
 [C++ agent x3] --TCP, newline-delimited JSON--> [Python ingest (asyncio) + FastAPI] --> [PostgreSQL]
                                                          ^                ^
-                                          [MCP server (FastMCP)]   [Streamlit dashboard]
+                                          [MCP server (MCPServer)]  [Streamlit dashboard]
                                                          ^
                                                  [Claude (LLM client)]
 ```
@@ -46,7 +46,7 @@ Docker, observability, and GDB/valgrind.
    - Config via env vars: SERVER_HOST, SERVER_PORT, AGENT_NAME, CPU_SOURCE (proc|cgroup).
 2. **server/** (Python): asyncio TCP ingest on port 9000 started inside FastAPI lifespan;
    REST API on port 8000; SQLModel/SQLAlchemy + PostgreSQL; anomaly rules as pure functions.
-3. **mcp_server/** (Python, official MCP SDK / FastMCP): tools that call the REST API.
+3. **mcp_server/** (Python, official MCP SDK `mcp` 2.x, `MCPServer` = old FastMCP): tools that call the REST API.
 4. **dashboard/** (Streamlit): hosts table, CPU/memory charts, anomalies list.
 5. **docker-compose.yml**: db, server, agent-1..3, dashboard.
 6. **.github/workflows/ci.yml**: C++ build+ctest, Python pytest+ruff, integration test.
@@ -110,8 +110,9 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] docs/architecture.md with a Mermaid diagram
 
 ### Day 4 - MCP server
-- [ ] FastMCP server with the 4 tools (clear docstrings)
-- [ ] Connect to Claude Code (`claude mcp add`), demo: "Which host is overloaded and why?"
+- [x] MCP server (`MCPServer`, formerly FastMCP) with the 4 tools (clear docstrings)
+- [~] Connect to Claude Code (`claude mcp add`), demo: "Which host is overloaded and why?"
+      (registered in `.mcp.json`; approval + demo still to do, see "Next" below)
 - [ ] pytest for tools with mocked REST API
 
 ### Day 5 - CI
@@ -139,7 +140,21 @@ Day 3 complete: full Compose stack (db, server, agent-1..3) works end to end
 (`docker compose up -d --build --wait`). Agents measure per-container CPU (`CPU_SOURCE=cgroup`);
 `scripts/load_test.sh` passes (cpu_high for agent-1 only). 44 GoogleTest tests pass.
 docs/ (architecture, decisions, debugging) updated for Day 3.
-Next: Day 4, step 1 - FastMCP server with the 4 tools.
+Day 4 in progress: MCP server (`mcp_server/server.py`, 4 tools) works against the running stack,
+verified in-process and through a real stdio MCP client. Registered in `.mcp.json` (project scope).
+
+Next (Day 4, step 2, finish the demo). Explain it step by step - Shuvat found it unclear:
+1. `docker compose up -d --wait` (stack must run).
+2. Open a NEW Claude Code session (the + button in the Claude Code panel); MCP servers load only
+   at session start. Approve `syspulse` when asked, or type `/mcp` and approve/enable it there.
+   Check it shows as connected with 4 tools.
+   Do NOT click VS Code's "Start" / "Add Server..." on `.mcp.json` (that is Copilot's MCP, not ours).
+3. Terminal: `STRESS_SECONDS=120 ./scripts/load_test.sh`, wait for PASS (~10s).
+4. Within 2 minutes, ask in the new session: "Which host is overloaded and why?"
+   Expected: compare_hosts -> find_anomalies -> get_host_metrics("agent-1") -> answer naming agent-1.
+5. Bring back the tool calls + answer (text/screenshot) -> write docs/mcp_demo.md.
+Then: Day 4, step 3 - pytest for the tools with a mocked REST API (httpx2.MockTransport).
+Uncommitted: `.mcp.json` (commit: "Register the SysPulse MCP server for Claude Code (.mcp.json)").
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -194,3 +209,15 @@ Next: Day 4, step 1 - FastMCP server with the 4 tools.
 - Windows `npx` (in PATH from /mnt/c) cannot read WSL paths, so mermaid-cli does not work here;
   check Mermaid diagrams in the VS Code preview or on GitHub.
 
+### MCP notes (decisions made during Day 4)
+- SDK `mcp==2.3.0` in its own venv `mcp_server/.venv` (`mcp_server/requirements.txt`).
+  2.x renamed FastMCP to `MCPServer` (`from mcp.server import MCPServer`); 1.x examples online
+  do not match. Brings `httpx2` (used as REST client; has `MockTransport` for tests) and pydantic.
+- `API_URL` env var (default `http://localhost:8000`). Transport: stdio (`mcp.run()`).
+- Expected failures raise `ToolError` (`mcp.server.mcpserver.exceptions`) -> model sees the message.
+  Argument limits via `Annotated[int, Field(ge=1, le=1440)]` and `Literal[...]` -> in the JSON schema.
+- `rank_hosts` (pure) does the compare_hosts logic; silent hosts last with `samples=0`.
+- Quick in-process check: `asyncio.run(mcp.call_tool(name, args))` -> `.structured_content`.
+- `claude` CLI is not on PATH; use the extension's binary:
+  `~/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude mcp list`.
+- Known limit: `mem_percent` identical across agents (memory from /proc/meminfo, whole machine).

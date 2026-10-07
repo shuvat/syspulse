@@ -159,6 +159,18 @@ aborting: temp-path '.' must be readable and writeable
   `--no-install-recommends` does not help, because these are hard dependencies.
 - Fix: stress-ng removed from the image; the load test uses one shell busy loop per CPU.
 
+## MCP: setup gotchas
+
+- `claude` was not on the PATH in WSL (only the VS Code extension is installed). The
+  extension ships the CLI: `~/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude`.
+- After `claude mcp add --scope project`, `claude mcp list` shows the server as
+  `Pending approval`: a project `.mcp.json` comes from the repo and runs a command on the
+  machine, so Claude Code runs it only after the user approves it (in a new session or `/mcp`).
+- VS Code shows its own "Start" and "Add Server..." buttons on `.mcp.json`. They belong to
+  VS Code's built-in chat (Copilot), not to Claude Code; no need to click them.
+- To check the server without Claude Code, launch it exactly as `.mcp.json` says from the repo
+  root with the SDK's client (`mcp.Client` + `StdioServerParameters`) and list the tools.
+
 ## GDB
 
 *(Day 6: breakpoints, `info threads`, `thread apply all bt`, planted bug.)*

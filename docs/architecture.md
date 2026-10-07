@@ -4,7 +4,7 @@ SysPulse collects system metrics from Linux hosts, stores them in PostgreSQL,
 detects anomalies, and exposes the data to a dashboard and to an LLM through MCP.
 
 > Status: the C++ agent, the Python server and the Docker Compose deployment (with a load
-> test) are implemented. The MCP server and the dashboard are planned (marked *planned* below).
+> test) and the MCP server are implemented. The dashboard is planned (marked *planned* below).
 
 ## Overview
 
@@ -24,7 +24,7 @@ flowchart LR
     end
 
     DB[(PostgreSQL)]
-    MCP[MCP server<br/>FastMCP - planned]
+    MCP[MCP server<br/>MCPServer, stdio]
     DASH[Streamlit dashboard - planned]
     LLM[Claude]
 
@@ -46,7 +46,7 @@ flowchart LR
    CPU and memory anomaly rules, all in one transaction.
 3. A background task checks every 5 seconds for hosts that went silent.
 4. The REST API serves hosts, metrics and anomalies.
-5. The dashboard and the MCP server are read-only clients of the REST API. *(planned)*
+5. The MCP server is a read-only client of the REST API; the dashboard will be one too. *(dashboard planned)*
 
 ## Message format
 
@@ -320,4 +320,44 @@ docker compose up -d --build --wait
 curl -s localhost:8000/hosts
 ./scripts/load_test.sh
 docker compose down          # add -v to also delete the database
+```
+
+## MCP server (Python)
+
+`mcp_server/server.py` lets an LLM client (Claude Code) query SysPulse. It uses the official
+MCP Python SDK, `mcp` 2.3.0, where FastMCP is called `MCPServer`. It has its own venv and
+`requirements.txt`, separate from the server.
+
+```mermaid
+flowchart LR
+    LLM[Claude Code] -- "MCP over stdio<br/>(starts server.py as a subprocess)" --> M[mcp_server/server.py]
+    M -- "HTTP GET (httpx2)" --> API[REST API :8000]
+```
+
+| Tool | Calls | Returns |
+|---|---|---|
+| `list_hosts()` | `GET /hosts` | Hosts with `first_seen` / `last_seen` |
+| `get_host_metrics(host, minutes=10)` | `GET /hosts/{host}/metrics` | Raw samples, oldest first |
+| `find_anomalies(minutes=60)` | `GET /anomalies` | Anomalies across hosts, newest first |
+| `compare_hosts(metric="cpu_percent", minutes=10)` | `GET /hosts` + metrics per host | Hosts ranked by average (`cpu_percent` or `mem_percent`), with max and latest |
+
+- Every tool is read-only; the REST API owns the data and the anomaly rules.
+- The type hints are the tool schema the model sees: `minutes` is limited to 1-1440 and
+  `metric` is an enum, so invalid arguments are rejected before the tool runs.
+- Docstrings are the tool descriptions the model reads to choose a tool; they explain what
+  the values mean (for example what `cpu_high` is).
+- Expected failures (unknown host, API down) raise `ToolError`: the model gets a clear
+  message, for example "host 'x' not found. Call list_hosts to see valid host names."
+- The ranking is a pure function, `rank_hosts`; hosts without samples are listed last with
+  `samples=0` instead of being dropped.
+- Logs go to stderr: with the stdio transport, stdout carries the protocol.
+- Registered for Claude Code in `.mcp.json` (project scope, relative paths, committed).
+  Claude Code asks the user to approve a project server before it runs it.
+
+### Run
+
+```bash
+cd mcp_server
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# Claude Code starts it automatically from .mcp.json; API_URL defaults to http://localhost:8000
 ```

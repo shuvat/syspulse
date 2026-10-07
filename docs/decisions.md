@@ -202,4 +202,23 @@
   delays the anomaly. Watch this in CI, where runners have fewer CPUs.
 
 ## AI integration: MCP server
-- Why: (fill in on Day 4)
+- Why: an LLM can answer open questions ("which host is overloaded and why?") by choosing
+  and combining tools, instead of a fixed dashboard view. MCP is the standard protocol for
+  exposing tools to LLM clients, so the same server works with any MCP client.
+- Tools, not resources: a *tool* is called by the model with arguments; a *resource* is data
+  the client application chooses to load, by URI. Our functions take parameters (host,
+  minutes, metric) and the model decides when to call them, so they are tools.
+- The MCP server calls the REST API instead of the database: one owner of the data and the
+  rules, no database credentials in the MCP server, and the API is already tested.
+- `compare_hosts` has no endpoint; it combines `/hosts` and per-host metrics. Fine for 3
+  hosts (N+1 requests); for many hosts a server-side aggregate endpoint would be better.
+- SDK: `mcp` 2.3.0 (official). In 2.x FastMCP was renamed `MCPServer`
+  (`mcp.server.fastmcp` raises an error pointing to the migration guide). Most online
+  examples are 1.x. It brings `httpx2`, used as the HTTP client, so no extra dependency.
+- Transport: stdio. The client starts the server as a subprocess: no port, no auth needed
+  for a local tool. A shared deployment would use Streamable HTTP with authentication.
+- Error handling: expected failures raise `ToolError`, so the model sees the message and can
+  recover. Any other exception reaches the model only as "Error executing tool" (no
+  internal details leak).
+- Known limit: `mem_percent` is the same for all agents, because memory still comes from
+  `/proc/meminfo` (whole machine). The cgroup's `memory.current` would fix it, like CPU.
