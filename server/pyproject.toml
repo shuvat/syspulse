@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+# Run from server/: makes `import app` work and limits collection to tests/.
+pythonpath = ["."]
+testpaths = ["tests"]

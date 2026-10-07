@@ -26,9 +26,12 @@ logger = logging.getLogger(__name__)
 SILENCE_CHECK_INTERVAL_S = 5
 
 
-def record_silent_hosts() -> None:
-    """Store a host_silent anomaly for each newly silent host (blocking)."""
-    now = datetime.now(UTC)
+def record_silent_hosts(now: datetime | None = None) -> None:
+    """Store a host_silent anomaly for each newly silent host (blocking).
+
+    `now` can be passed by tests to control the clock.
+    """
+    now = now or datetime.now(UTC)
     with Session(engine) as session:
         for host in session.exec(select(Host)).all():
             finding = check_silence(host.last_seen, now)
