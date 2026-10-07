@@ -98,10 +98,10 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - Done when: `nc -lk 9000` shows a JSON line every 2s; agent reconnects after nc restarts.
 
 ### Day 2 - Python server + PostgreSQL
-- [ ] PostgreSQL in a container; schema with SQLModel
-- [ ] asyncio TCP ingest (bad lines are logged, never crash the server)
-- [ ] REST endpoints + check /docs
-- [ ] anomalies.py (pure functions) + pytest (rules, parsing, endpoints via TestClient)
+- [x] PostgreSQL in a container; schema with SQLModel
+- [x] asyncio TCP ingest (bad lines are logged, never crash the server)
+- [x] REST endpoints + check /docs
+- [x] anomalies.py (pure functions) + pytest (rules, parsing, endpoints via TestClient)
 
 ### Day 3 - Docker Compose + load test
 - [ ] Multi-stage Dockerfile for agent; Dockerfile for server
@@ -132,8 +132,10 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 
 ## Current status
 Day 1 complete: C++ agent works end to end (verified against `nc -lk 9000`, including reconnect
-and Ctrl+C). 33 GoogleTest tests pass, clean under ThreadSanitizer. Next: Day 2, step 1 -
-PostgreSQL in a container + schema with SQLModel.
+and Ctrl+C). 33 GoogleTest tests pass, clean under ThreadSanitizer.
+Day 2 complete: Python server (ingest + REST + anomaly rules) works end to end with the real agent
+and PostgreSQL (CPU anomaly verified with stress-ng). 52 pytest tests pass.
+Next: Day 3, step 1 - multi-stage Dockerfile for the agent.
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -146,3 +148,25 @@ PostgreSQL in a container + schema with SQLModel.
 - Dependencies (pinned, FetchContent): nlohmann/json v3.12.0, GoogleTest v1.17.0 (gmock off).
 - `gtest_discover_tests` uses `DISCOVERY_MODE PRE_TEST`.
 - TSan on this WSL kernel needs ASLR off: `setarch -R ./build-tsan/agent_tests`.
+
+### Server notes (decisions made during Day 2)
+- Run from `server/` with the venv: `uvicorn app.main:app --port 8000`; DB: `docker compose up -d --wait db`.
+  `DATABASE_URL` env var (default: localhost, user/password/db `syspulse`).
+- One process: FastAPI `lifespan` starts the TCP ingest (port 9000) and the silent-host watcher.
+- Dependencies (pinned): fastapi 0.142.2, uvicorn 0.54.0, sqlmodel 0.0.48, psycopg[binary] 3.3.6;
+  dev (`requirements-dev.txt`): pytest 9.1.1, httpx 0.28.1. Starlette warns that httpx is
+  deprecated for TestClient (suggests `httpx2`) - not switched yet.
+- Schema: timestamps are `TIMESTAMP WITH TIME ZONE`; net counters are `BIGINT`; index on
+  `metrics(host_id, ts)`. `create_all` only creates missing tables (no migrations): after a model
+  change run `docker compose down -v`.
+- Ingest: Pydantic `MetricMessage` in strict mode; `parse_line` returns None on bad input.
+  DB writes run via `asyncio.to_thread`. Host upsert = `INSERT ... ON CONFLICT DO UPDATE RETURNING`.
+  `last_seen` uses the server clock; metric `ts` uses the agent's.
+- Shutdown: Python 3.12 `Server.wait_closed()` waits for open connections, so
+  `stop_ingest_server` closes all agent connections first.
+- Endpoints are plain `def` (thread pool) with separate response models (`HostOut`, ...).
+- Anomaly rules are pure and edge-triggered (one anomaly per event). CPU/memory rules run inside
+  `store_message` (same transaction); `host_silent` runs in a background task every 5s, once per
+  silence (skip if an anomaly newer than `last_seen` exists).
+- Tests use a real PostgreSQL database `syspulse_test` (created by conftest);
+  `TestClient(app)` without `with`, so the lifespan does not run.

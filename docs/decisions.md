@@ -70,7 +70,73 @@
   (for example a sanitizer build) fails the test run, not the build.
 
 ## Database: PostgreSQL
-- Why: (fill in on Day 2)
+- The data is relational (hosts -> metrics, hosts -> anomalies) with a fixed schema, and the
+  main queries are time windows and joins ("samples of host X in the last 10 minutes",
+  "anomalies with their host name"). SQL with foreign keys and indexes fits this directly.
+- Alternative rejected: MongoDB. Flexible documents are not needed for a fixed message
+  format, and joins and constraints would move into application code.
+- Timestamps are `TIMESTAMP WITH TIME ZONE` (stored as UTC), not Unix integers, so time-window
+  queries are plain SQL comparisons and values are readable in `psql`.
+- Network counters are `BIGINT`: cumulative byte counters pass the 2^31 limit of `INTEGER`
+  after about 2 GB of traffic.
+- Composite index on `metrics(host_id, ts)`: matches the per-host time-window query.
+  `host_id` comes first because the query filters on it by equality.
+- Known limit: tables are created with `create_all`, which never alters existing tables.
+  A real deployment would use migrations (Alembic).
+
+## Server: one process for ingest and REST API
+- FastAPI's `lifespan` starts the TCP ingest server and the silence watcher at startup and
+  stops them at shutdown. One container, one event loop, one database engine.
+- Ingest and API stay in separate modules, so they could run as separate processes later
+  (write and read load grow differently).
+
+## Ingest: validate at the boundary with Pydantic (strict mode)
+- Everything from the network is untrusted input. `parse_line` is the single place that
+  decides what enters the system; the rest of the code can assume valid data.
+- Strict mode rejects type coercion (`"42"` is not accepted as `42`): a message that does not
+  match the protocol is rejected, not guessed.
+- Like the agent's parsers, `parse_line` returns `None` on bad input instead of raising.
+
+## Ingest: blocking database calls in a worker thread
+- The database code is synchronous (SQLModel/SQLAlchemy). Calling it directly in a coroutine
+  would block the event loop, and with it every agent connection and the REST API.
+- `store_message` runs via `asyncio.to_thread`. Awaiting it keeps samples from one agent in order.
+- REST endpoints are plain `def`, so FastAPI runs them in its thread pool for the same reason.
+- Alternative rejected: an async database engine. It would need a second set of database code
+  and is not needed at this load.
+
+## Host upsert: INSERT ... ON CONFLICT DO UPDATE ... RETURNING
+- One atomic statement instead of SELECT followed by INSERT. With SELECT + INSERT, two
+  connections announcing the same new host could both find nothing and both insert.
+- Side effect: every conflicting INSERT still consumes a sequence value, so host ids have gaps.
+  This is normal; sequences never promise consecutive numbers.
+
+## last_seen uses the server clock
+- `metrics.ts` is the agent's measurement time. `hosts.last_seen` answers "when did the
+  server last hear from this host", so it uses the server clock and does not depend on the
+  agent's clock being correct. The silence rule relies on it.
+
+## API response models separate from the tables
+- Endpoints return `HostOut`, `MetricOut` and `AnomalyOut`, not the table models.
+- Why: internal ids are not exposed, anomalies carry the host name instead of `host_id`, and a
+  table change does not silently change the API used by the dashboard and the MCP server.
+
+## Anomaly rules: pure functions, edge-triggered
+- The rules take lists of values (and `now` for silence) and return a finding or `None`; no
+  database or real clock. They are tested directly with fixed inputs.
+- Edge-triggered: one anomaly when a condition starts, not one per sample while it lasts. A
+  5-minute CPU spike gives one anomaly, not 150 (avoids alert fatigue). To detect the start,
+  the CPU rule looks at one sample before the streak.
+- CPU and memory rules run inside `store_message`, in the same transaction as the sample.
+- `host_silent` cannot be triggered by a sample, because silence means no samples arrive.
+  A background task checks every 5 seconds. It records one anomaly per silence: it skips a
+  host that already has a `host_silent` anomaly newer than its `last_seen`. No extra state column.
+
+## Tests against a real PostgreSQL database
+- The code uses PostgreSQL-specific features (`ON CONFLICT`, `timestamptz`), so SQLite would
+  test different behavior than production.
+- Tests use a separate `syspulse_test` database, emptied before each test. The cost is a
+  dependency on a running PostgreSQL; CI will provide it as a service container.
 
 ## AI integration: MCP server
 - Why: (fill in on Day 4)
