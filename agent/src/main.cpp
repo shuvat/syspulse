@@ -1,7 +1,12 @@
+#include <pthread.h>
+
+#include <charconv>
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -20,21 +25,56 @@ std::string env_or(const char* name, const std::string& fallback) {
     return value ? value : fallback;
 }
 
+// Returns the port if `text` is a whole number in 1..65535.
+std::optional<uint16_t> parse_port(const std::string& text) {
+    int value = 0;
+    auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (ec != std::errc() || end != text.data() + text.size() || value < 1 || value > 65535) {
+        return std::nullopt;
+    }
+    return static_cast<uint16_t>(value);
+}
+
 }  // namespace
 
 int main() {
-    const std::string host = env_or("AGENT_NAME", "agent");
+    const std::string agent_name = env_or("AGENT_NAME", "agent");
+
+    SenderConfig config;
+    config.host = env_or("SERVER_HOST", "127.0.0.1");
+    const std::string port_text = env_or("SERVER_PORT", "9000");
+    auto port = parse_port(port_text);
+    if (!port) {
+        std::cerr << "invalid SERVER_PORT: " << port_text << "\n";
+        return 1;
+    }
+    config.port = *port;
+
+    // Block SIGINT/SIGTERM before starting threads. New threads inherit the
+    // mask, so no thread is interrupted by these signals; instead, main
+    // receives them synchronously with sigwait() below. This avoids a signal
+    // handler, where locking a mutex or notifying a condition_variable is not
+    // allowed (they are not async-signal-safe).
+    sigset_t signals;
+    sigemptyset(&signals);
+    sigaddset(&signals, SIGINT);
+    sigaddset(&signals, SIGTERM);
+    pthread_sigmask(SIG_BLOCK, &signals, nullptr);
 
     ThreadSafeQueue<Sample> queue(kQueueCapacity);
     StopFlag stop;
 
     // std::thread copies its arguments; std::ref passes a reference instead,
     // so both threads share the same queue and stop flag.
-    std::thread collector(run_collector, host, std::ref(queue), std::ref(stop), kInterval);
-    std::thread sender(run_sender, std::ref(queue), std::ref(std::cout));
+    std::thread collector(run_collector, agent_name, std::ref(queue), std::ref(stop), kInterval);
+    std::thread sender(run_sender, std::ref(queue), std::ref(stop), config);
 
-    // Temporary: run for 10 seconds. Ctrl+C handling comes in the next step.
-    std::this_thread::sleep_for(std::chrono::seconds(10));
+    std::cerr << "agent " << agent_name << " started, sending to " << config.host << ":"
+              << config.port << " (Ctrl+C to stop)\n";
+
+    int sig = 0;
+    sigwait(&signals, &sig);
+    std::cerr << "received " << (sig == SIGINT ? "SIGINT" : "SIGTERM") << ", shutting down\n";
 
     // Shutdown order matters: stop the producer first, then close the queue,
     // so the sender drains every sample that was already collected.
