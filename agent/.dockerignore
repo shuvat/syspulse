@@ -1,0 +1,3 @@
+# Local build directories: large, and their CMakeCache would clash with the in-image build.
+build/
+build-*/
