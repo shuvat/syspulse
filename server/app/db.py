@@ -11,7 +11,9 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+psycopg://syspulse:syspulse@localhost:5432/syspulse"
 )
 
-engine = create_engine(DATABASE_URL)
+# pool_pre_ping checks a pooled connection before use, so a database restart
+# does not make the next request fail on a dead connection.
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 def create_db_and_tables() -> None:

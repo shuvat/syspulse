@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session
 
-from app.db import create_db_and_tables, engine
+from app.db import engine
 from app.models import Host, Metric
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,9 @@ MAX_LINE_BYTES = 64 * 1024
 
 # Largest value a PostgreSQL BIGINT can hold; the agent sends uint64 counters.
 BIGINT_MAX = 2**63 - 1
+
+# Open agent connections, so shutdown can close them (see stop_ingest_server).
+_clients: set[asyncio.StreamWriter] = set()
 
 
 class MetricMessage(BaseModel):
@@ -81,6 +84,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     """Read lines from one agent until it disconnects. Never raises."""
     peer = writer.get_extra_info("peername")
     logger.info("agent connected: %s", peer)
+    _clients.add(writer)
     try:
         while True:
             line = await reader.readline()
@@ -105,6 +109,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     except ConnectionError:
         logger.warning("connection reset by %s", peer)
     finally:
+        _clients.discard(writer)
         writer.close()
         with contextlib.suppress(ConnectionError):
             await writer.wait_closed()
@@ -118,18 +123,12 @@ async def start_ingest_server(
     return await asyncio.start_server(handle_client, host, port, limit=MAX_LINE_BYTES)
 
 
-async def main() -> None:
-    create_db_and_tables()
-    server = await start_ingest_server()
-    logger.info("ingest listening on %s:%d", INGEST_HOST, INGEST_PORT)
-    async with server:
-        await server.serve_forever()
-
-
-if __name__ == "__main__":
-    # Standalone mode for manual testing; later the FastAPI app starts the server.
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
-    with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(main())
+async def stop_ingest_server(server: asyncio.Server) -> None:
+    """Stop accepting connections and disconnect all agents."""
+    server.close()
+    # Since Python 3.12, wait_closed() also waits for every open connection.
+    # Agents never disconnect on their own, so close them first; each
+    # handle_client() then sees EOF and finishes normally.
+    for writer in list(_clients):
+        writer.close()
+    await server.wait_closed()
