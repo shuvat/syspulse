@@ -1,5 +1,7 @@
 """FastAPI app: the REST API (port 8000) and the TCP ingest server (port 9000)."""
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,12 +14,59 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, col, select
 
-from app.db import create_db_and_tables, get_session
+from app.anomalies import check_silence
+from app.db import create_db_and_tables, engine, get_session
 from app.ingest import INGEST_PORT, start_ingest_server, stop_ingest_server
 from app.models import Anomaly, Host, Metric
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+
+SILENCE_CHECK_INTERVAL_S = 5
+
+
+def record_silent_hosts() -> None:
+    """Store a host_silent anomaly for each newly silent host (blocking)."""
+    now = datetime.now(UTC)
+    with Session(engine) as session:
+        for host in session.exec(select(Host)).all():
+            finding = check_silence(host.last_seen, now)
+            if finding is None:
+                continue
+            # One anomaly per silence: skip if this silence (i.e. one that
+            # started at host.last_seen) was already recorded.
+            already_recorded = session.exec(
+                select(Anomaly.id).where(
+                    Anomaly.host_id == host.id,
+                    Anomaly.type == finding.type,
+                    Anomaly.ts > host.last_seen,
+                )
+            ).first()
+            if already_recorded is not None:
+                continue
+            logger.warning("anomaly on %s: %s", host.name, finding.message)
+            session.add(
+                Anomaly(
+                    host_id=host.id,
+                    ts=now,
+                    type=finding.type,
+                    value=finding.value,
+                    message=finding.message,
+                )
+            )
+        session.commit()
+
+
+async def watch_silent_hosts() -> None:
+    """Background task: silence produces no samples, so nothing else would notice it."""
+    while True:
+        try:
+            await asyncio.to_thread(record_silent_hosts)
+        except Exception:
+            # E.g. the database is down: log and try again on the next round.
+            logger.exception("silence check failed")
+        await asyncio.sleep(SILENCE_CHECK_INTERVAL_S)
 
 
 @asynccontextmanager
@@ -26,7 +75,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     create_db_and_tables()
     ingest = await start_ingest_server()
     logger.info("ingest listening on port %d", INGEST_PORT)
+    watcher = asyncio.create_task(watch_silent_hosts())
     yield
+    watcher.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await watcher
     await stop_ingest_server(ingest)
     logger.info("ingest stopped")
 

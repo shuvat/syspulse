@@ -7,10 +7,11 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.dialects.postgresql import insert
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
+from app.anomalies import SAMPLES_NEEDED, check_cpu, check_memory, memory_percent
 from app.db import engine
-from app.models import Host, Metric
+from app.models import Anomaly, Host, Metric
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,8 @@ def parse_line(line: bytes) -> MetricMessage | None:
 
 
 def store_message(msg: MetricMessage) -> None:
-    """Upsert the host and insert the sample in one transaction (blocking)."""
+    """Upsert the host, insert the sample and run the per-sample anomaly rules,
+    all in one transaction (blocking)."""
     # last_seen uses the server clock: it answers "when did we last hear from
     # this host", and must not depend on the agent's clock being correct.
     now = datetime.now(UTC)
@@ -66,17 +68,45 @@ def store_message(msg: MetricMessage) -> None:
         )
         host_id = session.execute(upsert).scalar_one()
 
-        session.add(
-            Metric(
-                host_id=host_id,
-                ts=datetime.fromtimestamp(msg.ts, UTC),
-                cpu_percent=msg.cpu_percent,
-                mem_used_mb=msg.mem_used_mb,
-                mem_total_mb=msg.mem_total_mb,
-                net_rx_bytes=msg.net_rx_bytes,
-                net_tx_bytes=msg.net_tx_bytes,
-            )
+        metric = Metric(
+            host_id=host_id,
+            ts=datetime.fromtimestamp(msg.ts, UTC),
+            cpu_percent=msg.cpu_percent,
+            mem_used_mb=msg.mem_used_mb,
+            mem_total_mb=msg.mem_total_mb,
+            net_rx_bytes=msg.net_rx_bytes,
+            net_tx_bytes=msg.net_tx_bytes,
         )
+        session.add(metric)
+
+        # The query flushes the new metric first, so it is included.
+        latest_first = session.exec(
+            select(Metric)
+            .where(Metric.host_id == host_id)
+            .order_by(col(Metric.ts).desc(), col(Metric.id).desc())
+            .limit(SAMPLES_NEEDED)
+        ).all()
+        recent = list(reversed(latest_first))  # The rules expect oldest first.
+
+        findings = [
+            check_cpu([m.cpu_percent for m in recent]),
+            check_memory([memory_percent(m.mem_used_mb, m.mem_total_mb) for m in recent]),
+        ]
+        for finding in findings:
+            if finding is None:
+                continue
+            logger.warning("anomaly on %s: %s", msg.host, finding.message)
+            session.add(
+                Anomaly(
+                    host_id=host_id,
+                    ts=metric.ts,
+                    type=finding.type,
+                    value=finding.value,
+                    message=finding.message,
+                )
+            )
+
+        # Sample and anomalies are committed together, or not at all.
         session.commit()
 
 
