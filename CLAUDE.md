@@ -79,7 +79,7 @@ GET /health, GET /hosts, GET /hosts/{name}/metrics?minutes=10, GET /anomalies?mi
 
 ## Repo structure
 ```
-agent/        CMakeLists.txt, src/ (main.cpp, collector.*, sender.*, queue.h), tests/
+agent/        CMakeLists.txt, src/ (main.cpp, collector.*, sender.*, queue.h, stop_flag.h), tests/
 server/       app/ (main.py, ingest.py, db.py, models.py, anomalies.py), tests/, requirements.txt
 mcp_server/   server.py
 dashboard/    app.py
@@ -91,10 +91,10 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 ## Week plan (check off as we go)
 ### Day 1 - C++ agent
 - [x] Repo + folder structure, docs/decisions.md started
-- [ ] Parsing functions: CPU % from /proc/stat deltas, /proc/meminfo, /proc/net/dev
-- [ ] GoogleTest via FetchContent + tests for each parser (ctest passes)
-- [ ] Thread-safe queue + collector thread + sender thread
-- [ ] TCP sending with reconnect; graceful Ctrl+C
+- [x] Parsing functions: CPU % from /proc/stat deltas, /proc/meminfo, /proc/net/dev
+- [x] GoogleTest via FetchContent + tests for each parser (ctest passes)
+- [x] Thread-safe queue + collector thread + sender thread
+- [x] TCP sending with reconnect; graceful Ctrl+C
 - Done when: `nc -lk 9000` shows a JSON line every 2s; agent reconnects after nc restarts.
 
 ### Day 2 - Python server + PostgreSQL
@@ -131,4 +131,18 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
       PostgreSQL vs MongoDB, how MCP works (tool vs resource), what CI checks, scaling to 1000 hosts
 
 ## Current status
-Day 0 complete (environment ready). Starting Day 1, step 2: parsing functions.
+Day 1 complete: C++ agent works end to end (verified against `nc -lk 9000`, including reconnect
+and Ctrl+C). 33 GoogleTest tests pass, clean under ThreadSanitizer. Next: Day 2, step 1 -
+PostgreSQL in a container + schema with SQLModel.
+
+### Agent notes (decisions made during Day 1)
+- Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
+- Network counters are summed over all interfaces except `lo`; memory used = MemTotal - MemAvailable.
+- Queue is bounded (150 samples = 5 min) and drops the oldest item when full.
+- `StopFlag` (mutex + condition_variable) lets sleeping threads wake immediately on shutdown.
+- SIGINT/SIGTERM are blocked in all threads and received in main via `sigwait` (no signal handler).
+- Sender retries the same sample after reconnect; backoff 1s doubling to 30s. Known limit: one
+  sample can be lost when the server dies (send() succeeds into the kernel buffer).
+- Dependencies (pinned, FetchContent): nlohmann/json v3.12.0, GoogleTest v1.17.0 (gmock off).
+- `gtest_discover_tests` uses `DISCOVERY_MODE PRE_TEST`.
+- TSan on this WSL kernel needs ASLR off: `setarch -R ./build-tsan/agent_tests`.
