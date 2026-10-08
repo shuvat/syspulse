@@ -48,10 +48,11 @@ docker compose up -d --build --wait
 # Dashboard: http://localhost:8501   REST API docs: http://localhost:8000/docs
 ```
 
-Put load on one host and watch the CPU anomaly appear (for agent-1 only):
+Put load on one host and watch the anomaly appear (for agent-1 only):
 
 ```bash
-./scripts/load_test.sh
+./scripts/load_test.sh               # CPU    -> cpu_high
+LOAD=memory ./scripts/load_test.sh   # memory -> memory_high
 ```
 
 Ask Claude about it: the repo includes `.mcp.json`, so Claude Code offers the `syspulse` MCP
@@ -103,7 +104,7 @@ Stop with `docker compose down` (add `-v` to delete the database).
 | Unit + DB (server) | Anomaly rules, ingest, every REST endpoint, against a real PostgreSQL | 69 |
 | MCP tools | All tools through the MCP SDK, REST API mocked at the HTTP layer | 22 |
 | Dashboard | Data functions, and the whole app with Streamlit's `AppTest` | 12 |
-| Integration | Whole Compose stack: data flow, CPU anomaly, MCP ranking | 1 script |
+| Integration | Whole Compose stack: data flow, CPU and memory anomalies, MCP ranking | 1 script |
 
 CI runs six jobs on every push: C++ build and tests (also under valgrind), server tests with
 a PostgreSQL service container, MCP tests, dashboard tests, ruff, and then the integration

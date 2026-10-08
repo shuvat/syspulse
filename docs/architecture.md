@@ -336,12 +336,17 @@ its own container. Only anomalies newer than the start of the run count, so resu
 earlier runs cannot make it pass. With the 2-second interval and the 3-sample rule, the
 anomaly appears after about 10 seconds.
 
+`LOAD=memory ./scripts/load_test.sh` holds 92% of agent-1's memory limit instead (the size is
+read from `memory.max` inside the container, so a different `mem_limit` still works and stays
+below the OOM killer) and waits for `memory_high`, with the same agent-1-only check.
+
 ### Run the full system
 
 ```bash
 docker compose up -d --build --wait
 curl -s localhost:8000/hosts
-./scripts/load_test.sh
+./scripts/load_test.sh                 # CPU
+LOAD=memory ./scripts/load_test.sh     # memory
 docker compose down          # add -v to also delete the database
 ```
 
@@ -428,7 +433,8 @@ The README shows a CI status badge for `main`.
 1. `docker compose up -d --build --wait`: every healthcheck passes (db, server, dashboard).
 2. Every agent's samples reach the database and the REST API (agent -> TCP -> ingest -> DB).
 3. `scripts/load_test.sh`: CPU load in agent-1 gives `cpu_high` for agent-1 only.
-4. A real stdio MCP client starts `mcp_server/server.py` and calls `compare_hosts`:
+4. `LOAD=memory scripts/load_test.sh`: memory load in agent-1 gives `memory_high` for agent-1 only.
+5. A real stdio MCP client starts `mcp_server/server.py` and calls `compare_hosts`:
    agent-1 is ranked first.
 
 On exit it removes the test stack (`down -v`); on failure it first prints the container logs.

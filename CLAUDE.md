@@ -106,7 +106,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 ### Day 3 - Docker Compose + load test
 - [x] Multi-stage Dockerfile for agent; Dockerfile for server
 - [x] docker-compose.yml with healthcheck + depends_on + volume; 3 agents
-- [x] scripts/load_test.sh (CPU load in one agent) -> CPU anomaly appears
+- [x] scripts/load_test.sh (CPU load in one agent) -> CPU anomaly appears (Day 7: LOAD=memory too)
 - [x] docs/architecture.md with a Mermaid diagram
 
 ### Day 4 - MCP server
@@ -189,7 +189,11 @@ Fix 3 committed. Fix 4 done (not committed): MEM_SOURCE=cgroup (used = memory.cu
 total = memory.max or MemTotal; root cgroup without memory.current -> /proc/meminfo), compose
 `mem_limit: 256m`. 61 GoogleTest tests pass, valgrind clean. Live: ~1 MiB/256 per agent idle; holding
 235 MiB in agent-1 -> 93% + one memory_high for agent-1 only. Integration test passes.
-Next: more Day 7 improvements (Claude chooses), then interview prep.
+Fix 4 committed (2d72e18). Improvement: `LOAD=memory ./scripts/load_test.sh` (holds 92% of
+memory.max -> memory_high for agent-1 only); integration test now has 5 steps (CPU + memory) and
+passes in ~45 s. Not committed yet.
+Next: Day 7 improvement 2 - statistical anomaly rule (mean + std dev), then interview prep.
+Shuvat may record docs/media/dashboard.gif (ScreenToGif, 5 FPS, <5 MB) -> replace the PNG in README.
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -248,7 +252,7 @@ Next: more Day 7 improvements (Claude chooses), then interview prep.
   (`/health` through `python -c urllib`, no curl in slim) -> agents.
 - Published only on localhost: 8000 (API), 5432 (DB). 9000 (ingest) is internal only.
 - Agents share a YAML anchor `x-agent`; `environment` has its own anchor (`<<` merge is shallow).
-- Load test: `./scripts/load_test.sh` (stack must be up). Wait ~30s between runs (edge-triggered
+- Load test: `./scripts/load_test.sh` (stack must be up; `LOAD=cpu|memory`). Wait ~30s between runs (edge-triggered
   rule needs CPU to drop first). Under load agent-1 is at 97.6-100% of its 1-CPU limit.
 - Windows `npx` (in PATH from /mnt/c) cannot read WSL paths, so mermaid-cli does not work here;
   check Mermaid diagrams in the VS Code preview or on GitHub.

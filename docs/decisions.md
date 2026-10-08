@@ -328,6 +328,10 @@
   volume. The cleanup runs `docker compose down -v`, which would delete the development
   database if it used the same project. It uses the same ports, so the script refuses to
   start if something already answers on the API port.
+- Both resource rules are checked end to end (Day 7): CPU load gives `cpu_high`, memory load
+  (92% of the limit, read from `memory.max` so it never exceeds it) gives `memory_high`, each
+  for agent-1 only. The memory size is derived, not hard-coded, so changing `mem_limit` cannot
+  turn the test into an OOM kill.
 - `trap ... EXIT` always cleans up, and on failure first prints the container logs: in CI they
   are the only way to see what happened inside the containers.
 - In CI the `integration` job has `needs: [cpp, server, mcp-server, lint]`: it is the slowest

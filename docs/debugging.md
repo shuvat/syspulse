@@ -164,7 +164,8 @@ aborting: temp-path '.' must be readable and writeable
 ## Memory: making the memory rule fire for real
 
 - Memory per container (`MEM_SOURCE=cgroup`, `mem_limit: 256m`) meant `memory_high` could fire
-  for one host for the first time. To test it, hold ~235 MiB inside agent-1:
+  for one host for the first time. To test it, hold ~235 MiB inside agent-1 (now automated as
+  `LOAD=memory ./scripts/load_test.sh`, step 4 of the integration test):
 
   ```bash
   docker compose exec -T agent-1 sh -c '{ head -c 235m /dev/zero; sleep 20; } | tail > /dev/null'

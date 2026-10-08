@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Integration test: builds and starts the whole system with Docker Compose and checks the
-# full path: agents -> TCP ingest -> PostgreSQL -> REST API -> anomaly rules -> MCP tools.
+# full path: agents -> TCP ingest -> PostgreSQL -> REST API -> anomaly rules (CPU and
+# memory) -> MCP tools.
 #
 # Runs as a separate Compose project (syspulse-it) with its own containers and volume, and
 # removes them on exit, so the development stack and its data are never touched. It uses the
@@ -61,9 +62,12 @@ for host in "${HOSTS[@]}"; do
 done
 
 echo "== 3. CPU load in agent-1 -> cpu_high anomaly for agent-1 only"
-./scripts/load_test.sh
+LOAD=cpu ./scripts/load_test.sh
 
-echo "== 4. MCP: compare_hosts through a real stdio MCP client ranks agent-1 first"
+echo "== 4. Memory load in agent-1 -> memory_high anomaly for agent-1 only"
+LOAD=memory ./scripts/load_test.sh
+
+echo "== 5. MCP: compare_hosts through a real stdio MCP client ranks agent-1 first"
 # The script is passed on stdin; API_URL is passed as an argument.
 "$MCP_PYTHON" - "$API_URL" << 'EOF'
 import asyncio
