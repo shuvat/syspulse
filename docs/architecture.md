@@ -351,7 +351,7 @@ flowchart LR
 | `list_hosts()` | `GET /hosts` | Hosts with `first_seen` / `last_seen` |
 | `get_host_metrics(host, minutes=10)` | `GET /hosts/{host}/metrics` | Raw samples, oldest first |
 | `find_anomalies(minutes=60)` | `GET /anomalies` | Anomalies across hosts, newest first |
-| `compare_hosts(metric="cpu_percent", minutes=10)` | `GET /hosts` + metrics per host | Hosts ranked by average (`cpu_percent` or `mem_percent`), with max and latest |
+| `compare_hosts(metric="cpu_percent", minutes=10, rank_by="avg")` | `GET /hosts` + metrics per host | Hosts ranked by `avg`, `max` or `latest` of `cpu_percent` or `mem_percent`; every row has all three |
 
 - Every tool is read-only; the REST API owns the data and the anomaly rules.
 - The type hints are the tool schema the model sees: `minutes` is limited to 1-1440 and

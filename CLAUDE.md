@@ -75,7 +75,7 @@ GET /health, GET /hosts, GET /hosts/{name}/metrics?minutes=10, GET /anomalies?mi
 - list_hosts() -> all hosts + last_seen
 - get_host_metrics(host, minutes=10) -> recent samples
 - find_anomalies(minutes=60) -> anomalies across hosts
-- compare_hosts(metric="cpu_percent") -> ranking of hosts
+- compare_hosts(metric="cpu_percent", minutes=10, rank_by="avg"|"max"|"latest") -> ranking of hosts
 
 ## Repo structure
 ```
@@ -130,7 +130,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [ ] Optional fixes found in the MCP demo (docs/mcp_demo.md), one step each:
   - [x] `cpu_high` flapping -> hysteresis (end below 80% for 3 samples)
   - [x] false `host_silent` after the machine sleeps (watcher skips a round if it was paused)
-  - [ ] `compare_hosts` average dilutes fresh spikes (rank by latest/max)
+  - [x] `compare_hosts` average dilutes fresh spikes (rank by latest/max)
   - [ ] memory per container from cgroup (memory.current / memory.max)
 - [ ] Update CV + LinkedIn
 - [ ] Prepare answers: TCP vs UDP, mutex vs condition variable, CPU % from /proc/stat,
@@ -182,7 +182,10 @@ anomaly); integration test passes. Shuvat asked for as many fixes/improvements a
 Fix 2 done (not committed): `watcher_was_paused` (>15 s wall clock since previous round) -> skip one
 round + warning. 69 server tests pass. Verified: `docker compose pause server` 60 s -> 3 false
 host_silent before, 0 after; `docker compose stop agent-3` 45 s -> host_silent for agent-3 only.
-Next: Day 7 fix 3 - compare_hosts ranking option (latest/max).
+Fixes 1+2 committed (57ab948). Fix 3 done (not committed): `compare_hosts(..., rank_by=avg|max|latest)`,
+default avg; 22 MCP tests pass. Note: a running Claude Code session keeps the old MCP server process
+until the session (or /mcp server) restarts.
+Next: Day 7 fix 4 - memory per container from cgroup (memory.current / memory.max), C++ agent.
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -251,7 +254,7 @@ Next: Day 7 fix 3 - compare_hosts ranking option (latest/max).
 - `API_URL` env var (default `http://localhost:8000`). Transport: stdio (`mcp.run()`).
 - Expected failures raise `ToolError` (`mcp.server.mcpserver.exceptions`) -> model sees the message.
   Argument limits via `Annotated[int, Field(ge=1, le=1440)]` and `Literal[...]` -> in the JSON schema.
-- `rank_hosts` (pure) does the compare_hosts logic; silent hosts last with `samples=0`.
+- `rank_hosts(samples, metric, rank_by)` (pure) does the compare_hosts logic; silent hosts last with `samples=0`.
 - Quick in-process check: `asyncio.run(mcp.call_tool(name, args))` -> `.structured_content`.
 - `claude` CLI is not on PATH; use the extension's binary:
   `~/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude mcp list`.

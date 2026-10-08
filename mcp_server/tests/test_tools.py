@@ -74,6 +74,8 @@ def test_schema_shows_limits_and_allowed_metrics() -> None:
     tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
     props = tools["compare_hosts"].input_schema["properties"]
     assert props["metric"]["enum"] == ["cpu_percent", "mem_percent"]
+    assert props["rank_by"]["enum"] == ["avg", "max", "latest"]
+    assert props["rank_by"]["default"] == "avg"
     assert props["minutes"]["minimum"] == 1
     assert props["minutes"]["maximum"] == 1440
 
@@ -132,6 +134,7 @@ def test_unexpected_status_is_reported(api: FakeApi) -> None:
         ("find_anomalies", {"minutes": 0}),
         ("get_host_metrics", {"host": "agent-1", "minutes": 1441}),
         ("compare_hosts", {"metric": "disk"}),
+        ("compare_hosts", {"rank_by": "median"}),
     ],
 )
 def test_invalid_arguments_rejected_before_api_call(
@@ -159,6 +162,32 @@ def test_compare_hosts_ranks_by_average(api: FakeApi) -> None:
 
 
 # ---------- rank_hosts / metric_value (pure) ----------
+
+# A host with a fresh spike (the MCP demo's case) and a host that is busy all the time.
+FRESH_SPIKE = [sample(0.0)] * 8 + [sample(100.0), sample(100.0)]  # avg 20, max 100, latest 100
+STEADY = [sample(40.0)] * 10  # avg 40, max 40, latest 40
+
+
+@pytest.mark.parametrize(
+    ("rank_by", "first"),
+    [("avg", "steady"), ("latest", "spike"), ("max", "spike")],
+)
+def test_rank_hosts_by_option(rank_by: str, first: str) -> None:
+    ranking = rank_hosts({"spike": FRESH_SPIKE, "steady": STEADY}, "cpu_percent", rank_by)
+    assert ranking[0]["host"] == first
+
+
+def test_compare_hosts_passes_rank_by(api: FakeApi) -> None:
+    api.routes["/hosts"] = (200, HOSTS)
+    api.routes["/hosts/agent-1/metrics"] = (200, FRESH_SPIKE)
+    api.routes["/hosts/agent-2/metrics"] = (200, STEADY)
+
+    by_avg = call("compare_hosts")
+    by_latest = call("compare_hosts", rank_by="latest")
+
+    assert [r["host"] for r in by_avg] == ["agent-2", "agent-1"]
+    assert [r["host"] for r in by_latest] == ["agent-1", "agent-2"]
+
 
 def test_rank_hosts_lists_silent_hosts_last() -> None:
     ranking = rank_hosts(

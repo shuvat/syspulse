@@ -269,11 +269,13 @@
 - Error handling: expected failures raise `ToolError`, so the model sees the message and can
   recover. Any other exception reaches the model only as "Error executing tool" (no
   internal details leak).
-- Known limits: `mem_percent` is the same for all agents, because memory still comes from
+- Known limit: `mem_percent` is the same for all agents, because memory still comes from
   `/proc/meminfo` (whole machine); the cgroup's `memory.current` would fix it, like CPU.
-  `compare_hosts` ranks by the average over the window, which dilutes a load that started a
-  minute ago (seen in the demo: avg 4.6%, max 98.5%); ranking by a recent value would fit
-  "overloaded now" better.
+- `compare_hosts` takes `rank_by` (`avg`, `max`, `latest`; added on Day 7). In the demo, the
+  10-minute average hid a load that had started a minute before (avg 4.6%, max 98.5%). The
+  default stays `avg`, so existing calls behave the same; the docstring tells the model to
+  use `latest` for "right now" questions. The allowed values are an enum in the tool schema,
+  so a wrong value is rejected before the tool runs.
 - Demo and what it revealed: [mcp_demo.md](mcp_demo.md). The model's explanation of an old
   `host_silent` anomaly was a wrong guess: tool results are facts, the model's interpretation
   is a hypothesis to check.

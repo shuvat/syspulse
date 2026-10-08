@@ -100,7 +100,7 @@ Stop with `docker compose down` (add `-v` to delete the database).
 |---|---|---|
 | Unit (C++) | Parsers, CPU math, queue under concurrency, TCP sender against a real socket | 52 |
 | Unit + DB (server) | Anomaly rules, ingest, every REST endpoint, against a real PostgreSQL | 69 |
-| MCP tools | All tools through the MCP SDK, REST API mocked at the HTTP layer | 17 |
+| MCP tools | All tools through the MCP SDK, REST API mocked at the HTTP layer | 22 |
 | Dashboard | Data functions, and the whole app with Streamlit's `AppTest` | 12 |
 | Integration | Whole Compose stack: data flow, CPU anomaly, MCP ranking | 1 script |
 

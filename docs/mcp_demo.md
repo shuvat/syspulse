@@ -79,6 +79,8 @@ The order matches the docstrings: rank first, then anomalies, then raw samples t
    same kind of load with a dip now gives one anomaly (see [decisions.md](decisions.md)).
 3. **`compare_hosts` ranks by average**, which dilutes a fresh spike. The model handled it,
    but ranking by a recent window or by `latest` would fit "overloaded *now*" better.
+   **Fixed on Day 7:** `compare_hosts(..., rank_by="latest" | "max" | "avg")`; the docstring
+   tells the model to use `latest` for "right now" questions.
 
 Lesson: an LLM's explanation is a hypothesis. The tools give it facts; its interpretation of
 them still needs checking.
