@@ -123,8 +123,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] Streamlit dashboard added to compose
 - [x] valgrind --leak-check=full on agent -> no leaks
 - [x] GDB session (breakpoints, info threads, backtrace, planted bug) -> docs/debugging.md
-- [~] README: one-line pitch, demo video, diagram, tech stack, 3-command quick start
-      (all written; demo screenshots still to add: docs/media/, placeholder comment in README)
+- [x] README: one-line pitch, demo screenshots, diagram, tech stack, 3-command quick start
 
 ### Day 7 - Buffer, polish, interview prep
 - [ ] Finish leftovers; optional statistical anomaly rule (mean + std dev)
@@ -172,8 +171,9 @@ docs/media/claude.png saved (new MCP answer, with the question). Dashboard scree
 bug (lines vanished when agents' timestamps were misaligned; straight line across real gaps): fixed
 with long-format charts + `break_gaps`, verified by rendering the Streamlit chart spec to PNG.
 Dashboard container rebuilt. Not committed yet.
-Next: Shuvat retakes docs/media/dashboard.png (5-min window, STRESS_SECONDS=90 load test, whole
-page incl. legend), then uncomment the DEMO block in README. Then Day 7.
+docs/media/dashboard.png saved (charts after the fix, legend visible); README demo section enabled.
+Optional: a fuller screenshot with the hosts table and anomalies list.
+Next: Day 7 (buffer, optional fixes from mcp_demo.md, interview prep).
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.

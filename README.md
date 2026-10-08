@@ -6,10 +6,13 @@ Multithreaded C++ agents stream Linux metrics over TCP to a Python/PostgreSQL ba
 detects anomalies, with a live dashboard and an MCP server that lets Claude answer
 *"Which host is overloaded and why?"*
 
-<!-- DEMO: add docs/media/dashboard.png (or .gif) and docs/media/claude.png, then uncomment:
-![Dashboard during a load test](docs/media/dashboard.png)
-![Claude answering through the MCP server](docs/media/claude.png)
--->
+**Dashboard:** load tests on agent-1 (CPU at 100% of its limit) while agent-2 and agent-3 stay idle.
+
+![Dashboard: CPU and memory per host during load tests on agent-1](docs/media/dashboard.png)
+
+**Claude Code, through the MCP server:** finds the overloaded host and explains why.
+
+![Claude answering "Which host is overloaded and why?" with three MCP tool calls](docs/media/claude.png)
 
 ## What it does
 
