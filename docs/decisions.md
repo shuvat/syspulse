@@ -333,9 +333,13 @@
 - Dependency: only `streamlit` (pinned). It brings `pandas` (tables and reshaping), `altair`
   (charts) and `requests` (HTTP client), so nothing else is added. Cost: a 767MB image, mostly
   pandas, numpy and pyarrow.
-- Charts use the long -> wide reshape `pivot_table(index=ts, columns=host)`: one line per host.
-  `pivot_table` instead of `pivot`, because two samples can share a one-second timestamp,
-  which makes `pivot` fail.
+- Charts use the samples in long format (one row per sample, `color="host"`), not a wide
+  table with one column per host. Hosts sample on their own timers, so their timestamps do not
+  always fall on the same second; in a wide table every host then has NaN in every other row,
+  and the chart drew no line at all (found in a screenshot, see [debugging.md](debugging.md)).
+- `break_gaps` inserts an empty point when one host has no sample for more than 10 seconds,
+  so the line breaks instead of drawing a straight line across the time the host was down. A
+  monitoring chart should show a silent host, not hide it.
 - In the container: `--server.headless=true` (no browser to open) and
   `--browser.gatherUsageStats=false` (no usage telemetry sent out).
 - Published only on `127.0.0.1:8501`. The dashboard has no authentication; exposing it beyond

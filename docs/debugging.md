@@ -262,6 +262,34 @@ aborting: temp-path '.' must be readable and writeable
   In production this is the intended behavior; in tests, shared state between tests must be
   reset.
 
+## Dashboard: chart lines disappear although the data is there
+
+- Symptom (in a screenshot of the dashboard during a load test): every line, on both charts,
+  vanished for about a minute (11:30:50 -> 11:31:50), and later stopped early.
+- First check, the data: no host had a gap longer than 5 seconds, the containers had been up
+  the whole time, no `host_silent`. So the problem was in the chart, not in the system.
+- Diagnosis: the sample timestamps per host around the "gap":
+
+  ```
+  before:  agent-1 :21 :23 :25   agent-2 :21 :23 :25   agent-3 :21 :23 :25
+  inside:  agent-1 :56 :58 :00   agent-2 :55 :57 :59   agent-3 :55 :57 :59
+  after:   agent-1 :55 :57 :59   agent-2 :55 :57 :59   agent-3 :55 :57 :59
+  ```
+
+  Under load, agent-1 moved by one second. The agent runs in the same container as the load,
+  limited to one CPU, so its collector thread woke up a little late every interval (CFS
+  throttling also slows the monitoring process) until the delay added up to a second.
+- Cause: the chart used a wide table (one row per timestamp, one column per host). With
+  misaligned timestamps, every host had a value only in every other row, NaN in between.
+  The chart breaks a line at NaN, and a line of isolated points is not drawn. In the
+  current 15 minutes, 487 of 1836 cells of that table were NaN.
+- Fix: long format (one row per sample, `color="host"`), so each host's line uses only its
+  own samples; plus `break_gaps`, which breaks a line where one host has no data for more
+  than 10 seconds (before, a straight line was drawn across the time the stack was stopped).
+- Checked without a browser: the chart spec that Streamlit builds was rendered to PNG with
+  `vl-convert` (in a throwaway venv) on the same real data: before, the gap was reproduced;
+  after, continuous lines. A synthetic 60-second outage showed the line breaking.
+
 ## GDB
 
 Build: `agent/build` is Debug (`-g`, no optimization), so GDB shows source lines and

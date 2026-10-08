@@ -446,7 +446,7 @@ server, it is a read-only client of the REST API and never touches the database.
 | File | Responsibility |
 |---|---|
 | `app.py` | Page layout, refresh and caching (Streamlit) |
-| `data.py` | `api_get` (requests, 5s timeout, errors -> `ApiError`), `host_status`, `metrics_frame`, `chart_frame`, `hosts_frame` |
+| `data.py` | `api_get` (requests, 5s timeout, errors -> `ApiError`), `host_status`, `metrics_frame` (one row per sample), `break_gaps` (line breaks where a host was down), `hosts_frame` |
 
 ### Run and tests
 

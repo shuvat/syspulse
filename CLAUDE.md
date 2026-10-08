@@ -155,7 +155,7 @@ Day 5 complete: integration test (`scripts/integration_test.sh`) passes locally 
 limit (cpu.max) - before, CPU was relative to the whole machine and the anomaly was flaky.
 52 GoogleTest tests pass. README has the CI badge.
 Day 6 in progress: Streamlit dashboard (`dashboard/app.py` + `data.py`) in compose at
-http://localhost:8501; 11 pytest tests (pure functions + AppTest) pass; CI has a `dashboard` job
+http://localhost:8501; 12 pytest tests (pure functions + AppTest) pass; CI has a `dashboard` job
 (integration now needs it too). Verified against the real API under load; integration test passes.
 Not pushed yet.
 Dashboard committed (331fc85). Valgrind: real agent (incl. reconnect + SIGINT) and agent_tests
@@ -168,8 +168,12 @@ Shuvat should also run the interactive "Try it yourself" session herself (interv
 README written (pitch, architecture, quick start, highlights, stack, tests, layout, docs links).
 Quick start verified from a fresh `git clone` (project `syspulse-fresh`): dashboard/API 200, 3 hosts,
 load test PASS, MCP via .mcp.json works. Not committed yet.
-Next: Shuvat records docs/media/dashboard.png (during load test) + docs/media/claude.png (MCP answer),
-then uncomment the DEMO block in README. Then Day 7 (buffer, optional fixes, interview prep).
+docs/media/claude.png saved (new MCP answer, with the question). Dashboard screenshot exposed a chart
+bug (lines vanished when agents' timestamps were misaligned; straight line across real gaps): fixed
+with long-format charts + `break_gaps`, verified by rendering the Streamlit chart spec to PNG.
+Dashboard container rebuilt. Not committed yet.
+Next: Shuvat retakes docs/media/dashboard.png (5-min window, STRESS_SECONDS=90 load test, whole
+page incl. legend), then uncomment the DEMO block in README. Then Day 7.
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -267,6 +271,10 @@ then uncomment the DEMO block in README. Then Day 7 (buffer, optional fixes, int
 - `streamlit==1.65.0` in its own venv `dashboard/.venv` (brings pandas 3, altair, requests).
   Dev: `requirements-dev.txt` (pytest 9.1.1, ruff 0.16.10). Tests: `cd dashboard && .venv/bin/pytest`.
 - `app.py` = UI only; `data.py` = API client (`requests`, 5s timeout, `ApiError`) + pure functions.
+- Charts: long format `st.line_chart(df, x="ts", y=..., color="host")` + `break_gaps` (NaN point
+  after >10s per-host gap). Never pivot to wide: agents' timestamps drift apart under load.
+- Visual check without a browser: build the chart with Streamlit's `generate_chart`, `.to_dict()`,
+  render with `vl-convert-python` in a scratch venv, look at the PNG.
 - Live refresh: `@st.fragment(run_every="5s")`; `@st.cache_data(ttl=4)` on `load(minutes)`.
 - Tests: `AppTest.from_file("../app.py")` (path relative to the test file); monkeypatch
   `data.api_get`; call `st.cache_data.clear()` before each app test.

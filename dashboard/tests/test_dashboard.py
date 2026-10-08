@@ -7,6 +7,7 @@ is replaced by monkeypatching data.api_get, so no server is needed.
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pandas as pd
 import pytest
 import requests
 import streamlit as st
@@ -51,28 +52,51 @@ def test_metrics_frame_zero_total_memory() -> None:
     assert frame.loc[0, "mem_percent"] == 0.0
 
 
-def test_chart_frame_one_column_per_host() -> None:
+# ---------- break_gaps ----------
+
+def series(frame: Any, host: str) -> list[float]:
+    """The cpu_percent values of one host in time order (NaN = a line break)."""
+    return frame[frame["host"] == host].sort_values("ts")["cpu_percent"].tolist()
+
+
+def test_break_gaps_misaligned_hosts_stay_continuous() -> None:
+    # The case found in a screenshot: under load agent-1 drifted to even seconds while the
+    # others stayed on odd seconds. Each host's own series must have no NaN.
     frame = data.metrics_frame({
-        "a": [sample("2026-10-08T06:00:00Z", 10.0), sample("2026-10-08T06:00:02Z", 20.0)],
-        "b": [sample("2026-10-08T06:00:00Z", 90.0)],
+        "agent-1": [sample(f"2026-10-08T08:31:{s:02d}Z", 100.0) for s in (0, 2, 4, 6)],
+        "agent-2": [sample(f"2026-10-08T08:31:{s:02d}Z", 0.0) for s in (1, 3, 5, 7)],
     })
 
-    chart = data.chart_frame(frame, "cpu_percent")
+    result = data.break_gaps(frame)
 
-    assert list(chart.columns) == ["a", "b"]
-    assert chart["a"].tolist() == [10.0, 20.0]
-
-
-def test_chart_frame_averages_samples_with_same_timestamp() -> None:
-    # Two samples in the same second (timestamps have one-second resolution).
-    frame = data.metrics_frame({
-        "a": [sample("2026-10-08T06:00:00Z", 10.0), sample("2026-10-08T06:00:00Z", 30.0)],
-    })
-    assert data.chart_frame(frame, "cpu_percent")["a"].tolist() == [20.0]
+    assert series(result, "agent-1") == [100.0] * 4
+    assert series(result, "agent-2") == [0.0] * 4
 
 
-def test_chart_frame_empty() -> None:
-    assert data.chart_frame(data.metrics_frame({}), "cpu_percent").empty
+def test_break_gaps_inserts_one_break_in_a_long_gap() -> None:
+    frame = data.metrics_frame({"a": [
+        sample("2026-10-08T06:00:00Z", 10.0),
+        sample("2026-10-08T06:00:02Z", 20.0),
+        sample("2026-10-08T06:01:02Z", 30.0),  # 60 s later: the host was down.
+    ]})
+
+    values = series(data.break_gaps(frame), "a")
+
+    assert len(values) == 4
+    assert values[:2] == [10.0, 20.0]
+    assert pd.isna(values[2])  # The break, right after the last sample before the gap.
+    assert values[3] == 30.0
+
+
+def test_break_gaps_normal_interval_has_no_break() -> None:
+    frame = data.metrics_frame({"a": [
+        sample("2026-10-08T06:00:00Z", 10.0), sample("2026-10-08T06:00:02Z", 20.0),
+    ]})
+    assert series(data.break_gaps(frame), "a") == [10.0, 20.0]
+
+
+def test_break_gaps_empty() -> None:
+    assert data.break_gaps(data.metrics_frame({})).empty
 
 
 # ---------- hosts_frame ----------

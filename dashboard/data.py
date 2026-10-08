@@ -16,6 +16,10 @@ API_URL = os.environ.get("API_URL", "http://localhost:8000")
 # Same limit as the server's host_silent rule.
 SILENT_AFTER = timedelta(seconds=30)
 
+# Agents sample every 2 seconds; a longer gap between two samples of one host means the
+# host (or the whole stack) was down, and the chart line must not bridge it.
+MAX_SAMPLE_GAP = timedelta(seconds=10)
+
 Row = dict[str, Any]
 
 
@@ -55,15 +59,23 @@ def metrics_frame(samples_by_host: dict[str, list[Row]]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["ts", "host", "cpu_percent", "mem_percent"])
 
 
-def chart_frame(metrics: pd.DataFrame, column: str) -> pd.DataFrame:
-    """Wide format for a line chart: index = time, one column per host.
+def break_gaps(metrics: pd.DataFrame, max_gap: timedelta = MAX_SAMPLE_GAP) -> pd.DataFrame:
+    """Insert an empty point (NaN values) inside every gap longer than `max_gap`.
 
-    pivot_table (not pivot) averages samples that share a timestamp: the agent's
-    timestamps have one-second resolution, so two samples can land on the same second.
+    A line chart joins consecutive points of a host, so without this a host that was down
+    for 5 minutes would get a straight line across those 5 minutes, as if it had reported.
+    The empty point breaks the line instead. Each host is checked against its own previous
+    sample, so hosts sampling on different seconds do not affect each other.
     """
     if metrics.empty:
-        return pd.DataFrame()
-    return metrics.pivot_table(index="ts", columns="host", values=column, aggfunc="mean")
+        return metrics
+    ordered = metrics.sort_values(["host", "ts"])
+    gap = ordered.groupby("host")["ts"].diff() > max_gap
+    # One empty point per gap, one second after the last sample before the gap.
+    breaks = ordered.loc[gap, ["host"]].assign(
+        ts=ordered["ts"].shift(1)[gap] + timedelta(seconds=1)
+    )
+    return pd.concat([ordered, breaks]).sort_values(["host", "ts"]).reset_index(drop=True)
 
 
 def hosts_frame(

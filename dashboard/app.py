@@ -53,16 +53,19 @@ def live_view(minutes: int) -> None:
         },
     )
 
-    metrics = data.metrics_frame(samples_by_host)
+    # Long format (one row per sample, color by host): each host's line is drawn from its
+    # own samples, so hosts that sample on different seconds do not break each other's
+    # lines (a wide table with one column per host would have NaN in every other row).
+    metrics = data.break_gaps(data.metrics_frame(samples_by_host))
     cpu_col, mem_col = st.columns(2)
     with cpu_col:
         st.subheader("CPU %")
         st.caption("Relative to each container's CPU limit")
-        st.line_chart(data.chart_frame(metrics, "cpu_percent"), y_label="%")
+        st.line_chart(metrics, x="ts", y="cpu_percent", color="host", x_label="", y_label="%")
     with mem_col:
         st.subheader("Memory %")
         st.caption("Memory used / total")
-        st.line_chart(data.chart_frame(metrics, "mem_percent"), y_label="%")
+        st.line_chart(metrics, x="ts", y="mem_percent", color="host", x_label="", y_label="%")
 
     st.subheader(f"Anomalies (last {ANOMALY_MINUTES} minutes)")
     if anomalies:
