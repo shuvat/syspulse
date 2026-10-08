@@ -111,8 +111,8 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 
 ### Day 4 - MCP server
 - [x] MCP server (`MCPServer`, formerly FastMCP) with the 4 tools (clear docstrings)
-- [~] Connect to Claude Code (`claude mcp add`), demo: "Which host is overloaded and why?"
-      (registered in `.mcp.json`; approval + demo still to do, see "Next" below)
+- [x] Connect to Claude Code (`claude mcp add`), demo: "Which host is overloaded and why?"
+      (docs/mcp_demo.md)
 - [ ] pytest for tools with mocked REST API
 
 ### Day 5 - CI
@@ -127,6 +127,9 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 
 ### Day 7 - Buffer, polish, interview prep
 - [ ] Finish leftovers; optional statistical anomaly rule (mean + std dev)
+- [ ] Optional fixes found in the MCP demo (docs/mcp_demo.md): `cpu_high` flapping (add
+      hysteresis/cooldown); false `host_silent` after the machine sleeps (watcher skips a round
+      if it was suspended itself); `compare_hosts` average dilutes fresh spikes
 - [ ] Update CV + LinkedIn
 - [ ] Prepare answers: TCP vs UDP, mutex vs condition variable, CPU % from /proc/stat,
       PostgreSQL vs MongoDB, how MCP works (tool vs resource), what CI checks, scaling to 1000 hosts
@@ -143,18 +146,8 @@ docs/ (architecture, decisions, debugging) updated for Day 3.
 Day 4 in progress: MCP server (`mcp_server/server.py`, 4 tools) works against the running stack,
 verified in-process and through a real stdio MCP client. Registered in `.mcp.json` (project scope).
 
-Next (Day 4, step 2, finish the demo). Explain it step by step - Shuvat found it unclear:
-1. `docker compose up -d --wait` (stack must run).
-2. Open a NEW Claude Code session (the + button in the Claude Code panel); MCP servers load only
-   at session start. Approve `syspulse` when asked, or type `/mcp` and approve/enable it there.
-   Check it shows as connected with 4 tools.
-   Do NOT click VS Code's "Start" / "Add Server..." on `.mcp.json` (that is Copilot's MCP, not ours).
-3. Terminal: `STRESS_SECONDS=120 ./scripts/load_test.sh`, wait for PASS (~10s).
-4. Within 2 minutes, ask in the new session: "Which host is overloaded and why?"
-   Expected: compare_hosts -> find_anomalies -> get_host_metrics("agent-1") -> answer naming agent-1.
-5. Bring back the tool calls + answer (text/screenshot) -> write docs/mcp_demo.md.
-Then: Day 4, step 3 - pytest for the tools with a mocked REST API (httpx2.MockTransport).
-Uncommitted: `.mcp.json` (commit: "Register the SysPulse MCP server for Claude Code (.mcp.json)").
+Demo done (docs/mcp_demo.md): compare_hosts -> find_anomalies -> get_host_metrics -> agent-1.
+Next: Day 4, step 3 - pytest for the tools with a mocked REST API (httpx2.MockTransport).
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
