@@ -123,7 +123,8 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] Streamlit dashboard added to compose
 - [x] valgrind --leak-check=full on agent -> no leaks
 - [x] GDB session (breakpoints, info threads, backtrace, planted bug) -> docs/debugging.md
-- [ ] README: one-line pitch, demo video, diagram, tech stack, 3-command quick start
+- [~] README: one-line pitch, demo video, diagram, tech stack, 3-command quick start
+      (all written; demo screenshots still to add: docs/media/, placeholder comment in README)
 
 ### Day 7 - Buffer, polish, interview prep
 - [ ] Finish leftovers; optional statistical anomaly rule (mean + std dev)
@@ -164,7 +165,11 @@ GDB done (docs/debugging.md): healthy-agent session (3 threads, print sample, co
 breakpoint + finish) and a planted self-deadlock in ThreadSafeQueue::push (size() under the lock),
 diagnosed with thread apply all bt + mutex owner LWP; bug removed, 52 tests pass. Not committed yet.
 Shuvat should also run the interactive "Try it yourself" session herself (interview prep).
-Next: Day 6, step 4 - README (pitch, demo, diagram, tech stack, 3-command quick start).
+README written (pitch, architecture, quick start, highlights, stack, tests, layout, docs links).
+Quick start verified from a fresh `git clone` (project `syspulse-fresh`): dashboard/API 200, 3 hosts,
+load test PASS, MCP via .mcp.json works. Not committed yet.
+Next: Shuvat records docs/media/dashboard.png (during load test) + docs/media/claude.png (MCP answer),
+then uncomment the DEMO block in README. Then Day 7 (buffer, optional fixes, interview prep).
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
