@@ -130,19 +130,34 @@
 - The rules take lists of values (and `now` for silence) and return a finding or `None`; no
   database or real clock. They are tested directly with fixed inputs.
 - Edge-triggered: one anomaly when a condition starts, not one per sample while it lasts. A
-  5-minute CPU spike gives one anomaly, not 150 (avoids alert fatigue). To detect the start,
-  the CPU rule looks at one sample before the streak.
+  5-minute CPU spike gives one anomaly, not 150 (avoids alert fatigue).
+- CPU hysteresis (added on Day 7, after the MCP demo showed 4 anomalies for one load): an
+  event *starts* when CPU is above 90% for 3 samples, but *ends* only when it is below 80%
+  for 3 samples. A short dip (the demo had one sample at 59.9%) no longer splits one event
+  into several. Like a thermostat: one temperature turns the heating on, a lower one off.
+- The "event open" state is derived from stored data, not kept in a new column: the host's
+  last `cpu_high` anomaly and its samples since then (`cpu_event_open`). The rule stays a
+  pure function, and nothing can get out of sync after a restart. Cost: `store_message`
+  loads the last 150 samples (5 minutes) instead of 4. A new event can only start right after
+  the previous one cleared, so the clearing run is always inside that window. At thousands
+  of hosts, a stored per-host state (or a stream processor) would be cheaper than re-reading
+  history on every sample.
+- Alternative rejected: a cooldown (no new anomaly for N minutes). Simpler, but it hides a
+  real second spike inside the cooldown and still splits a load longer than N minutes.
 - CPU and memory rules run inside `store_message`, in the same transaction as the sample.
 - `host_silent` cannot be triggered by a sample, because silence means no samples arrive.
   A background task checks every 5 seconds. It records one anomaly per silence: it skips a
   host that already has a `host_silent` anomaly newer than its `last_seen`. No extra state column.
-- Known limits, found in the MCP demo ([mcp_demo.md](mcp_demo.md)), not fixed yet:
-  - No hysteresis: a short dip below 90% ends a CPU event, so one 2-minute load produced
-    4 `cpu_high` anomalies (flapping). Fix: end the event only after CPU stays below a lower
-    threshold (e.g. 80%) for several samples, or a cooldown per host.
-  - The silence watcher cannot tell "the host was silent" from "the monitor itself was
-    suspended" (laptop sleep froze the whole WSL VM): false `host_silent` after wake-up.
-    Fix: skip a round when the watcher's own previous run is much older than 5 seconds.
+- The silence watcher must tell "the host was silent" from "the monitor itself was not
+  running". Found in the MCP demo ([mcp_demo.md](mcp_demo.md)): after a laptop sleep froze
+  the whole WSL VM, the watcher reported hours of silence for hosts that were fine. Fix
+  (Day 7): if more than 15 seconds of wall-clock time passed since the watcher's previous
+  round (it runs every 5), it was paused itself; it logs a warning and skips one round, so
+  the agents' samples are stored first. Wall-clock time on purpose: during a machine sleep
+  Linux's monotonic clock stops, while the wall clock jumps forward.
+- Trade-off: a real silence that starts during a server pause is reported one round (5 s)
+  later. A round that itself takes longer than 15 s (e.g. a hanging database) also makes the
+  next round skip, which is harmless.
 
 ## Tests against a real PostgreSQL database
 - The code uses PostgreSQL-specific features (`ON CONFLICT`, `timestamptz`), so SQLite would

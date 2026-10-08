@@ -68,14 +68,15 @@ The order matches the docstrings: rank first, then anomalies, then raw samples t
    wake-up the silence watcher compared `last_seen` with the current time and reported
    5 hours of silence. Only for agent-1: agent-2 and agent-3 sent a sample a few
    milliseconds before the watcher ran (a race).
-   Possible fix: the watcher detects that it was suspended itself (time since its own last
-   run much longer than 5 seconds) and skips that round.
+   **Fixed on Day 7:** the watcher detects that it was paused itself (more than 15 s since
+   its previous round, which should be 5 s) and skips one round. Checked by freezing the
+   server container for 60 s: 3 false `host_silent` anomalies before the fix, 0 after.
 2. **`cpu_high` fired 4 times during one 2-minute load** (05:59:36, 05:59:54, 06:00:12,
    06:00:40). The rule is edge-triggered without hysteresis: every dip below 90% (like the
    59.9% sample) ends the event, and the next 3 high samples start a new one (flapping).
    The model reported only the first anomaly.
-   Possible fix: hysteresis (the event ends only after CPU stays below a lower threshold, for
-   example 80%, for several samples) or a cooldown per host.
+   **Fixed on Day 7** with hysteresis: the event ends only after 3 samples below 80%. The
+   same kind of load with a dip now gives one anomaly (see [decisions.md](decisions.md)).
 3. **`compare_hosts` ranks by average**, which dilutes a fresh spike. The model handled it,
    but ranking by a recent window or by `latest` would fit "overloaded *now*" better.
 

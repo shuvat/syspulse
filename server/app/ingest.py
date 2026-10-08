@@ -7,9 +7,15 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.dialects.postgresql import insert
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
-from app.anomalies import SAMPLES_NEEDED, check_cpu, check_memory, memory_percent
+from app.anomalies import (
+    SAMPLES_NEEDED,
+    check_cpu,
+    check_memory,
+    cpu_event_open,
+    memory_percent,
+)
 from app.db import engine
 from app.models import Anomaly, Host, Metric
 
@@ -88,8 +94,21 @@ def store_message(msg: MetricMessage) -> None:
         ).all()
         recent = list(reversed(latest_first))  # The rules expect oldest first.
 
+        # Hysteresis state is derived from stored data, not kept in a column: the last
+        # cpu_high anomaly of this host and the samples after it.
+        last_cpu_alert = session.exec(
+            select(func.max(Anomaly.ts)).where(
+                Anomaly.host_id == host_id, Anomaly.type == "cpu_high"
+            )
+        ).one()
+        cpu_since_alert = (
+            None
+            if last_cpu_alert is None
+            else [m.cpu_percent for m in recent if m.ts > last_cpu_alert]
+        )
+
         findings = [
-            check_cpu([m.cpu_percent for m in recent]),
+            check_cpu([m.cpu_percent for m in recent], cpu_event_open(cpu_since_alert)),
             check_memory([memory_percent(m.mem_used_mb, m.mem_total_mb) for m in recent]),
         ]
         for finding in findings:

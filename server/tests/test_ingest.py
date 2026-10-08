@@ -103,8 +103,29 @@ def test_long_cpu_spike_creates_one_anomaly(session: Session, make_msg: MakeMsg)
 
 
 def test_two_cpu_spikes_create_two_anomalies(session: Session, make_msg: MakeMsg) -> None:
-    for i, cpu in enumerate([99, 99, 99, 5, 99, 99, 99]):
+    # Three quiet samples between the spikes end the first event.
+    for i, cpu in enumerate([99, 99, 99, 5, 5, 5, 99, 99, 99]):
         store_message(make_msg(ts=1_760_000_000 + 2 * i, cpu_percent=float(cpu)))
+
+    assert anomaly_types(session) == ["cpu_high", "cpu_high"]
+
+
+def test_flapping_cpu_creates_one_anomaly(session: Session, make_msg: MakeMsg) -> None:
+    # The pattern from the MCP demo: an unsteady load with short dips. Before hysteresis
+    # every dip below 90% ended the event, and one load gave 4 anomalies.
+    pattern = [99, 99, 99, 59.9, 94, 95, 97, 88, 91, 93, 96, 85, 99, 99, 99]
+    for i, cpu in enumerate(pattern):
+        store_message(make_msg(ts=1_760_000_000 + 2 * i, cpu_percent=float(cpu)))
+
+    assert anomaly_types(session) == ["cpu_high"]
+
+
+def test_cpu_events_are_tracked_per_host(session: Session, make_msg: MakeMsg) -> None:
+    # An open event on one host must not silence the rule on another.
+    for i in range(3):
+        store_message(make_msg(host="agent-1", ts=1_760_000_000 + 2 * i, cpu_percent=99.0))
+    for i in range(3):
+        store_message(make_msg(host="agent-2", ts=1_760_000_010 + 2 * i, cpu_percent=99.0))
 
     assert anomaly_types(session) == ["cpu_high", "cpu_high"]
 

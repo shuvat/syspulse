@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, col, select
 
-from app.anomalies import check_silence
+from app.anomalies import check_silence, watcher_was_paused
 from app.db import create_db_and_tables, engine, get_session
 from app.ingest import INGEST_PORT, start_ingest_server, stop_ingest_server
 from app.models import Anomaly, Host, Metric
@@ -63,12 +63,22 @@ def record_silent_hosts(now: datetime | None = None) -> None:
 
 async def watch_silent_hosts() -> None:
     """Background task: silence produces no samples, so nothing else would notice it."""
+    previous_run: datetime | None = None
     while True:
-        try:
-            await asyncio.to_thread(record_silent_hosts)
-        except Exception:
-            # E.g. the database is down: log and try again on the next round.
-            logger.exception("silence check failed")
+        now = datetime.now(UTC)
+        if watcher_was_paused(previous_run, now):
+            # The server itself was not running (e.g. the machine slept), so the missing
+            # samples say nothing about the hosts. Skip one round: meanwhile the agents'
+            # samples (sent or buffered) are stored and last_seen catches up.
+            paused_s = (now - previous_run).total_seconds()
+            logger.warning("silence watcher was paused for %.0f s, skipping one round", paused_s)
+        else:
+            try:
+                await asyncio.to_thread(record_silent_hosts)
+            except Exception:
+                # E.g. the database is down: log and try again on the next round.
+                logger.exception("silence check failed")
+        previous_run = now
         await asyncio.sleep(SILENCE_CHECK_INTERVAL_S)
 
 

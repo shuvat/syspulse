@@ -231,13 +231,13 @@ window" query. Tables are created with `create_all` at startup (no migrations ye
 
 | Type | Rule | Where it runs |
 |---|---|---|
-| `cpu_high` | CPU > 90% for 3 consecutive samples | after each sample, in `store_message` |
+| `cpu_high` | CPU > 90% for 3 consecutive samples; the event ends only after 3 samples < 80% (hysteresis) | after each sample, in `store_message` |
 | `memory_high` | `mem_used_mb / mem_total_mb` > 90% | after each sample, in `store_message` |
 | `host_silent` | no data for more than 30 seconds | background task, every 5 seconds |
 
 Rules are edge-triggered: one anomaly when a condition starts, not one per sample while it lasts.
-Known limits (flapping without hysteresis, false `host_silent` after the machine sleeps) are
-described in [decisions.md](decisions.md) and [mcp_demo.md](mcp_demo.md).
+The CPU rule has hysteresis, and the silence watcher skips a round when it was paused itself
+(e.g. the machine slept), so it does not blame the hosts; see [decisions.md](decisions.md).
 
 ### REST API
 

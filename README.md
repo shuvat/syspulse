@@ -99,7 +99,7 @@ Stop with `docker compose down` (add `-v` to delete the database).
 | Level | What | Count |
 |---|---|---|
 | Unit (C++) | Parsers, CPU math, queue under concurrency, TCP sender against a real socket | 52 |
-| Unit + DB (server) | Anomaly rules, ingest, every REST endpoint, against a real PostgreSQL | 52 |
+| Unit + DB (server) | Anomaly rules, ingest, every REST endpoint, against a real PostgreSQL | 69 |
 | MCP tools | All tools through the MCP SDK, REST API mocked at the HTTP layer | 17 |
 | Dashboard | Data functions, and the whole app with Streamlit's `AppTest` | 12 |
 | Integration | Whole Compose stack: data flow, CPU anomaly, MCP ranking | 1 script |
@@ -126,5 +126,5 @@ docs/         architecture, design decisions, debugging notes, MCP demo
 - [Debugging notes](docs/debugging.md): real problems found while building, and how
 - [MCP demo](docs/mcp_demo.md): Claude investigating a load spike, and what it revealed
 
-Known limitations (memory is still measured for the whole machine, anomaly rules without
-hysteresis, no database migrations) are listed in [decisions](docs/decisions.md).
+Known limitations (memory is still measured for the whole machine, no database migrations)
+are listed in [decisions](docs/decisions.md).

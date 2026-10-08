@@ -219,7 +219,19 @@ aborting: temp-path '.' must be readable and writeable
 - Why only agent-1: on wake-up, agent-2 and agent-3 sent a sample a few milliseconds before
   the watcher's next round, agent-1 did not (a race).
 - Lesson: a monitor must be able to tell "the host was silent" from "I was not running".
-  Not fixed yet (see [decisions.md](decisions.md)).
+- Reproduced without sleeping the laptop: `docker compose pause server` freezes the server's
+  processes (cgroup freezer) like a sleep does, while the agents keep running:
+
+  ```bash
+  docker compose pause server; sleep 60; docker compose unpause server
+  ```
+
+  Before the fix: 3 `host_silent` ("No data for 61 s"), one per agent, although every agent
+  was alive and its samples were waiting in the socket buffers.
+- Fix (Day 7): the watcher skips one round when more than 15 s passed since its previous
+  round. After: 0 anomalies, and the log says
+  `silence watcher was paused for 64 s, skipping one round`. Checked the other direction
+  too: `docker compose stop agent-3` for 45 s still gives `host_silent` for agent-3 only.
 
 ## Anomalies: `cpu_high` fires several times during one load
 
@@ -228,7 +240,10 @@ aborting: temp-path '.' must be readable and writeable
 - Cause: the rule is edge-triggered without hysteresis. Samples under load fluctuate around
   90-98% with occasional dips (59.9% once); every dip below 90% ends the event, and the next
   3 high samples start a new one (flapping).
-- Not fixed yet (see [decisions.md](decisions.md)).
+- Fix (Day 7): hysteresis, the event ends only after 3 samples below 80%. Covered by
+  `test_flapping_cpu_creates_one_anomaly` (the demo's pattern) and checked for real: two
+  20-second loads with a dip of two samples (51%, 0%) in between gave one `cpu_high`.
+  Disabling the hysteresis made 7 tests fail.
 
 ## Tests: checking that the tests catch bugs
 

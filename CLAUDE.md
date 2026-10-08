@@ -67,7 +67,7 @@ anomalies(id, host_id -> hosts, ts, type, value, message)
 GET /health, GET /hosts, GET /hosts/{name}/metrics?minutes=10, GET /anomalies?minutes=60
 
 ### Anomaly rules
-- CPU > 90% for 3 consecutive samples
+- CPU > 90% for 3 consecutive samples (hysteresis: event ends after 3 samples < 80%)
 - Memory usage > 90%
 - Host silent for more than 30 seconds
 
@@ -127,9 +127,11 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 
 ### Day 7 - Buffer, polish, interview prep
 - [ ] Finish leftovers; optional statistical anomaly rule (mean + std dev)
-- [ ] Optional fixes found in the MCP demo (docs/mcp_demo.md): `cpu_high` flapping (add
-      hysteresis/cooldown); false `host_silent` after the machine sleeps (watcher skips a round
-      if it was suspended itself); `compare_hosts` average dilutes fresh spikes
+- [ ] Optional fixes found in the MCP demo (docs/mcp_demo.md), one step each:
+  - [x] `cpu_high` flapping -> hysteresis (end below 80% for 3 samples)
+  - [x] false `host_silent` after the machine sleeps (watcher skips a round if it was paused)
+  - [ ] `compare_hosts` average dilutes fresh spikes (rank by latest/max)
+  - [ ] memory per container from cgroup (memory.current / memory.max)
 - [ ] Update CV + LinkedIn
 - [ ] Prepare answers: TCP vs UDP, mutex vs condition variable, CPU % from /proc/stat,
       PostgreSQL vs MongoDB, how MCP works (tool vs resource), what CI checks, scaling to 1000 hosts
@@ -173,7 +175,14 @@ with long-format charts + `break_gaps`, verified by rendering the Streamlit char
 Dashboard container rebuilt. Not committed yet.
 docs/media/dashboard.png saved (charts after the fix, legend visible); README demo section enabled.
 Optional: a fuller screenshot with the hosts table and anomalies list.
-Next: Day 7 (buffer, optional fixes from mcp_demo.md, interview prep).
+Day 7 in progress. Fix 1 done (not committed): CPU hysteresis in anomalies.py (`cpu_event_open`,
+`check_cpu(recent, event_open)`), state derived from the last cpu_high anomaly + samples since;
+store_message loads 150 samples. 63 server tests pass; verified live (two loads with a dip -> 1
+anomaly); integration test passes. Shuvat asked for as many fixes/improvements as possible, I choose.
+Fix 2 done (not committed): `watcher_was_paused` (>15 s wall clock since previous round) -> skip one
+round + warning. 69 server tests pass. Verified: `docker compose pause server` 60 s -> 3 false
+host_silent before, 0 after; `docker compose stop agent-3` 45 s -> host_silent for agent-3 only.
+Next: Day 7 fix 3 - compare_hosts ranking option (latest/max).
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -215,7 +224,7 @@ Next: Day 7 (buffer, optional fixes from mcp_demo.md, interview prep).
 - Shutdown: Python 3.12 `Server.wait_closed()` waits for open connections, so
   `stop_ingest_server` closes all agent connections first.
 - Endpoints are plain `def` (thread pool) with separate response models (`HostOut`, ...).
-- Anomaly rules are pure and edge-triggered (one anomaly per event). CPU/memory rules run inside
+- Anomaly rules are pure and edge-triggered (one anomaly per event); CPU has hysteresis (Day 7). CPU/memory rules run inside
   `store_message` (same transaction); `host_silent` runs in a background task every 5s, once per
   silence (skip if an anomaly newer than `last_seen` exists).
 - Tests use a real PostgreSQL database `syspulse_test` (created by conftest);
