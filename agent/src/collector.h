@@ -65,11 +65,20 @@ double cpu_percent(const CpuTimes& prev, const CpuTimes& cur);
 // while /proc/stat always describes the whole machine.
 std::optional<uint64_t> parse_cgroup_cpu_usage(const std::string& cpu_stat);
 
-// CPU usage in percent [0, 100] of the whole machine (all `num_cpus` CPUs)
-// between two cpu.stat readings taken `elapsed_usec` apart. Same scale as
-// cpu_percent(): 100 means every CPU was busy for the whole interval.
+// CPU limit of a cgroup in CPUs (e.g. 1.5), from a cgroup v2 cpu.max file
+// ("<quota_usec> <period_usec>", e.g. "150000 100000"). Returns std::nullopt for
+// "max" (no limit) and for malformed input: both mean "no usable limit".
+std::optional<double> parse_cgroup_cpu_limit(const std::string& cpu_max);
+
+// How many CPUs a cgroup can use: its limit, but never more than the machine has.
+// Without a limit (std::nullopt), all `online_cpus`.
+double effective_cpu_capacity(std::optional<double> limit_cpus, unsigned online_cpus);
+
+// CPU usage in percent [0, 100] of `cpu_capacity` CPUs between two cpu.stat
+// readings taken `elapsed_usec` apart. 100 means the cgroup used its whole
+// capacity (its CPU limit, or every CPU of the machine if it has none).
 double cgroup_cpu_percent(uint64_t prev_usage_usec, uint64_t cur_usage_usec,
-                          uint64_t elapsed_usec, unsigned num_cpus);
+                          uint64_t elapsed_usec, double cpu_capacity);
 
 // Reads a whole file into a string. The only function here that touches disk.
 std::optional<std::string> read_file(const std::string& path);

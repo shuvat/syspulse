@@ -33,8 +33,9 @@ if ! curl -sf "$API_URL/health" > /dev/null; then
     exit 1
 fi
 
-# One busy loop per CPU inside agent-1, so the container uses (almost) the whole
-# machine; the same as `stress-ng --cpu 0`, without adding stress-ng to the image.
+# One busy loop per CPU of the machine inside agent-1 (the same as `stress-ng --cpu 0`,
+# without adding stress-ng to the image). agent-1 is limited to one CPU, so the loops
+# keep it at 100% of its limit as long as one CPU of the machine is free.
 # The script runs in agent-1's shell; the duration is passed as $1 (not pasted
 # into the script text). Started with &, so errors still reach this terminal.
 echo "Loading all CPUs in agent-1 for ${STRESS_SECONDS}s..."

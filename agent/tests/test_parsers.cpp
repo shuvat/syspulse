@@ -137,6 +137,50 @@ TEST(CgroupCpuPercent, ReturnsZeroWithoutElapsedTimeOrCpus) {
     EXPECT_DOUBLE_EQ(cgroup_cpu_percent(0, 1'000'000, 2'000'000, 0), 0.0);
 }
 
+TEST(CgroupCpuPercent, RelativeToFractionalLimit) {
+    // Limit of half a CPU: 0.5s used in 1s is the whole capacity.
+    EXPECT_DOUBLE_EQ(cgroup_cpu_percent(0, 500'000, 1'000'000, 0.5), 100.0);
+}
+
+// ---------- cgroup v2 cpu.max ----------
+
+TEST(ParseCgroupCpuLimit, OneCpu) {
+    EXPECT_EQ(parse_cgroup_cpu_limit("100000 100000\n"), 1.0);
+}
+
+TEST(ParseCgroupCpuLimit, FractionalCpus) {
+    // docker run --cpus=1.5
+    EXPECT_EQ(parse_cgroup_cpu_limit("150000 100000\n"), 1.5);
+}
+
+TEST(ParseCgroupCpuLimit, MaxMeansNoLimit) {
+    // Real content without a limit (read inside agent-1 before limits were set).
+    EXPECT_FALSE(parse_cgroup_cpu_limit("max 100000\n").has_value());
+}
+
+TEST(ParseCgroupCpuLimit, ReturnsNulloptOnMalformedInput) {
+    EXPECT_FALSE(parse_cgroup_cpu_limit("").has_value());
+    EXPECT_FALSE(parse_cgroup_cpu_limit("100000\n").has_value());      // No period.
+    EXPECT_FALSE(parse_cgroup_cpu_limit("abc 100000\n").has_value());  // Quota not a number.
+    EXPECT_FALSE(parse_cgroup_cpu_limit("100000 0\n").has_value());    // Division by zero.
+    EXPECT_FALSE(parse_cgroup_cpu_limit("0 100000\n").has_value());    // Zero capacity.
+}
+
+// ---------- effective_cpu_capacity ----------
+
+TEST(EffectiveCpuCapacity, UsesLimitBelowCpuCount) {
+    EXPECT_DOUBLE_EQ(effective_cpu_capacity(1.0, 8), 1.0);
+}
+
+TEST(EffectiveCpuCapacity, AllCpusWithoutLimit) {
+    EXPECT_DOUBLE_EQ(effective_cpu_capacity(std::nullopt, 8), 8.0);
+}
+
+TEST(EffectiveCpuCapacity, LimitAboveCpuCountIsCapped) {
+    // --cpus=16 on an 8-CPU machine: at most 8 CPUs can actually be used.
+    EXPECT_DOUBLE_EQ(effective_cpu_capacity(16.0, 8), 8.0);
+}
+
 // ---------- /proc/meminfo ----------
 
 TEST(ParseMeminfo, ComputesUsedFromAvailable) {

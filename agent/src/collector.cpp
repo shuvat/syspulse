@@ -1,6 +1,7 @@
 #include "collector.h"
 
 #include <algorithm>
+#include <charconv>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -58,16 +59,44 @@ std::optional<uint64_t> parse_cgroup_cpu_usage(const std::string& cpu_stat) {
     return std::nullopt;
 }
 
+std::optional<double> parse_cgroup_cpu_limit(const std::string& cpu_max) {
+    // Format: "<quota> <period>" on one line, e.g. "100000 100000" = 1 CPU,
+    // or "max 100000" = no limit.
+    std::istringstream fields(cpu_max);
+    std::string quota_text;
+    uint64_t period = 0;
+    if (!(fields >> quota_text >> period) || quota_text == "max" || period == 0) {
+        return std::nullopt;
+    }
+    uint64_t quota = 0;
+    auto [end, ec] =
+        std::from_chars(quota_text.data(), quota_text.data() + quota_text.size(), quota);
+    if (ec != std::errc() || end != quota_text.data() + quota_text.size() || quota == 0) {
+        return std::nullopt;
+    }
+    return static_cast<double>(quota) / static_cast<double>(period);
+}
+
+double effective_cpu_capacity(std::optional<double> limit_cpus, unsigned online_cpus) {
+    // A limit above the number of CPUs (e.g. --cpus=16 on an 8-CPU machine)
+    // cannot be reached, so it is not a useful denominator.
+    if (limit_cpus && *limit_cpus < online_cpus) {
+        return *limit_cpus;
+    }
+    return online_cpus;
+}
+
 double cgroup_cpu_percent(uint64_t prev_usage_usec, uint64_t cur_usage_usec,
-                          uint64_t elapsed_usec, unsigned num_cpus) {
-    // No interval, no CPUs, or a counter that went backwards (e.g. the cgroup
+                          uint64_t elapsed_usec, double cpu_capacity) {
+    // No interval, no capacity, or a counter that went backwards (e.g. the cgroup
     // was recreated): there is nothing meaningful to measure.
-    if (elapsed_usec == 0 || num_cpus == 0 || cur_usage_usec < prev_usage_usec) {
+    if (elapsed_usec == 0 || cpu_capacity <= 0.0 || cur_usage_usec < prev_usage_usec) {
         return 0.0;
     }
-    // The CPU time available in the interval is wall time on every CPU.
+    // The CPU time available in the interval is wall time on every CPU the
+    // cgroup may use.
     double used = static_cast<double>(cur_usage_usec - prev_usage_usec);
-    double available = static_cast<double>(elapsed_usec) * num_cpus;
+    double available = static_cast<double>(elapsed_usec) * cpu_capacity;
     // Clamp: the two readings and the wall clock are not taken at exactly the
     // same instant, so the ratio can slightly exceed 100%.
     return std::clamp(used / available * 100.0, 0.0, 100.0);
@@ -161,6 +190,7 @@ struct CpuReading {
     CpuTimes times;                                   // CpuSource::Proc
     uint64_t usage_usec = 0;                          // CpuSource::Cgroup
     std::chrono::steady_clock::time_point taken_at;  // CpuSource::Cgroup
+    double cpu_capacity = 0.0;                        // CpuSource::Cgroup
 };
 
 std::optional<CpuReading> read_cpu(CpuSource source) {
@@ -182,6 +212,12 @@ std::optional<CpuReading> read_cpu(CpuSource source) {
         // steady_clock, not system_clock: it never jumps (e.g. NTP adjustments),
         // so the measured interval is always the real elapsed time.
         reading.taken_at = std::chrono::steady_clock::now();
+        // Read on every sample, because the limit can change at runtime
+        // (docker update --cpus). A missing file (e.g. the root cgroup) means no limit.
+        auto max_text = read_file("/sys/fs/cgroup/cpu.max");
+        auto limit = max_text ? parse_cgroup_cpu_limit(*max_text) : std::nullopt;
+        // hardware_concurrency() may return 0 if unknown; cgroup_cpu_percent() then returns 0.
+        reading.cpu_capacity = effective_cpu_capacity(limit, std::thread::hardware_concurrency());
     }
     return reading;
 }
@@ -191,10 +227,8 @@ double cpu_percent_between(CpuSource source, const CpuReading& prev, const CpuRe
         return cpu_percent(prev.times, cur.times);
     }
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(cur.taken_at - prev.taken_at);
-    // hardware_concurrency() may return 0 if unknown; cgroup_cpu_percent() then returns 0.
     return cgroup_cpu_percent(prev.usage_usec, cur.usage_usec,
-                              static_cast<uint64_t>(elapsed.count()),
-                              std::thread::hardware_concurrency());
+                              static_cast<uint64_t>(elapsed.count()), cur.cpu_capacity);
 }
 
 std::optional<MemInfo> read_meminfo() {
