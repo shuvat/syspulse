@@ -161,6 +161,25 @@ aborting: temp-path '.' must be readable and writeable
   `--no-install-recommends` does not help, because these are hard dependencies.
 - Fix: stress-ng removed from the image; the load test uses one shell busy loop per CPU.
 
+## Memory: making the memory rule fire for real
+
+- Memory per container (`MEM_SOURCE=cgroup`, `mem_limit: 256m`) meant `memory_high` could fire
+  for one host for the first time. To test it, hold ~235 MiB inside agent-1:
+
+  ```bash
+  docker compose exec -T agent-1 sh -c '{ head -c 235m /dev/zero; sleep 20; } | tail > /dev/null'
+  ```
+
+  `tail` keeps its whole input in memory (a stream of zeros has no newlines). The first try,
+  `head -c 235m /dev/zero | tail`, showed 73% for one sample only: `tail` exits as soon as its
+  input ends. Keeping the input open (`sleep 20` inside the braces) holds the memory.
+- Inside the container during the test: `memory.current` 250 MB, `anon` 248 MB,
+  `inactive_file` 74 KB. The agent reported 93% for 20 seconds; one `memory_high`
+  ("Memory usage 93.4% is above 90%"), for agent-1 only.
+- Gotcha avoided: on a systemd host (like the CI runner), the agent outside a container sees
+  the root cgroup, which has no `memory.current`; without the fallback to `/proc/meminfo`
+  every sample would be skipped and the collector test would hang.
+
 ## Load test: CPU anomaly appears only sometimes (flaky test)
 
 - Symptom: the first integration test run failed at the load step ("no cpu_high anomaly

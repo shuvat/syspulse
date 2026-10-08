@@ -45,6 +45,16 @@ std::optional<CpuSource> parse_cpu_source(const std::string& text) {
     return std::nullopt;
 }
 
+std::optional<MemSource> parse_mem_source(const std::string& text) {
+    if (text == "proc") {
+        return MemSource::Proc;
+    }
+    if (text == "cgroup") {
+        return MemSource::Cgroup;
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 int main() {
@@ -68,6 +78,13 @@ int main() {
         std::cerr << "invalid CPU_SOURCE (expected proc or cgroup): " << cpu_source_text << "\n";
         return 1;
     }
+    // Same choice for memory: "cgroup" = this container, relative to its memory limit.
+    const std::string mem_source_text = env_or("MEM_SOURCE", "proc");
+    auto mem_source = parse_mem_source(mem_source_text);
+    if (!mem_source) {
+        std::cerr << "invalid MEM_SOURCE (expected proc or cgroup): " << mem_source_text << "\n";
+        return 1;
+    }
 
     // Block SIGINT/SIGTERM before starting threads. New threads inherit the
     // mask, so no thread is interrupted by these signals; instead, main
@@ -86,11 +103,12 @@ int main() {
     // std::thread copies its arguments; std::ref passes a reference instead,
     // so both threads share the same queue and stop flag.
     std::thread collector(run_collector, agent_name, std::ref(queue), std::ref(stop), kInterval,
-                          *cpu_source);
+                          *cpu_source, *mem_source);
     std::thread sender(run_sender, std::ref(queue), std::ref(stop), config);
 
     std::cerr << "agent " << agent_name << " started, sending to " << config.host << ":"
-              << config.port << ", CPU source: " << cpu_source_text << " (Ctrl+C to stop)\n";
+              << config.port << ", CPU source: " << cpu_source_text
+              << ", memory source: " << mem_source_text << " (Ctrl+C to stop)\n";
 
     int sig = 0;
     sigwait(&signals, &sig);

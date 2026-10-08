@@ -4,12 +4,16 @@ x-agent: &agent
   environment: &agent-env
     SERVER_HOST: server
     SERVER_PORT: "9000"
-    # Measure each container's own CPU (cgroup), not the whole machine (/proc/stat).
+    # Measure each container's own CPU and memory (cgroup), not the whole machine
+    # (/proc/stat, /proc/meminfo).
     CPU_SOURCE: cgroup
+    MEM_SOURCE: cgroup
   # Each agent may use at most one CPU. The agent reports CPU % relative to this limit
   # (cgroup cpu.max), so 100% means "the container uses everything it is allowed to",
   # independent of the load from anything else on the machine.
   cpus: "1.0"
+  # Same idea for memory: memory % is relative to this limit (cgroup memory.max).
+  mem_limit: 256m
   depends_on:
     server:
       condition: service_healthy

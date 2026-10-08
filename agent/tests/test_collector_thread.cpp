@@ -10,12 +10,12 @@ using namespace std::chrono_literals;
 namespace {
 
 // Runs the collector until it produces one sample, then stops it.
-Sample collect_one(CpuSource source) {
+Sample collect_one(CpuSource cpu_source, MemSource mem_source) {
     ThreadSafeQueue<Sample> queue(100);
     StopFlag stop;
 
     std::thread collector(run_collector, "test-host", std::ref(queue), std::ref(stop), 20ms,
-                          source);
+                          cpu_source, mem_source);
     auto sample = queue.pop();  // Blocks until the first sample arrives.
     stop.request_stop();
     collector.join();  // Returns quickly because wait_for() is woken by stop.
@@ -38,9 +38,9 @@ void expect_valid(const Sample& sample) {
 // These read the real /proc and /sys/fs/cgroup, so they only run on Linux
 // with cgroup v2 (our target and the CI runners).
 TEST(RunCollector, PushesSamplesFromProc) {
-    expect_valid(collect_one(CpuSource::Proc));
+    expect_valid(collect_one(CpuSource::Proc, MemSource::Proc));
 }
 
 TEST(RunCollector, PushesSamplesFromCgroup) {
-    expect_valid(collect_one(CpuSource::Cgroup));
+    expect_valid(collect_one(CpuSource::Cgroup, MemSource::Cgroup));
 }

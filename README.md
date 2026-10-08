@@ -66,9 +66,10 @@ Stop with `docker compose down` (add `-v` to delete the database).
 
 ## Engineering highlights
 
-- **Per-container CPU from cgroups.** Inside a container, `/proc/stat` shows the whole machine,
-  so all agents reported the same CPU. The agent reads its own cgroup (`cpu.stat`) instead,
-  and reports CPU relative to the container's limit (`cpu.max`). That second step fixed a
+- **Per-container CPU and memory from cgroups.** Inside a container, `/proc/stat` and
+  `/proc/meminfo` show the whole machine, so all agents reported the same values. The agent
+  reads its own cgroup instead (`cpu.stat`, `memory.current`) and reports both relative to the
+  container's limits (`cpu.max`, `memory.max`). That second step fixed a
   flaky test: measured against the whole machine, the result depended on whatever else was
   running. ([decisions](docs/decisions.md#cpu-percent-relative-to-the-containers-cpu-limit))
 - **A deadlock diagnosed with GDB.** A planted self-deadlock in the thread-safe queue: no crash,
@@ -98,7 +99,7 @@ Stop with `docker compose down` (add `-v` to delete the database).
 
 | Level | What | Count |
 |---|---|---|
-| Unit (C++) | Parsers, CPU math, queue under concurrency, TCP sender against a real socket | 52 |
+| Unit (C++) | Parsers, CPU and memory math, queue under concurrency, TCP sender against a real socket | 61 |
 | Unit + DB (server) | Anomaly rules, ingest, every REST endpoint, against a real PostgreSQL | 69 |
 | MCP tools | All tools through the MCP SDK, REST API mocked at the HTTP layer | 22 |
 | Dashboard | Data functions, and the whole app with Streamlit's `AppTest` | 12 |
@@ -126,5 +127,5 @@ docs/         architecture, design decisions, debugging notes, MCP demo
 - [Debugging notes](docs/debugging.md): real problems found while building, and how
 - [MCP demo](docs/mcp_demo.md): Claude investigating a load spike, and what it revealed
 
-Known limitations (memory is still measured for the whole machine, no database migrations)
-are listed in [decisions](docs/decisions.md).
+Known limitations (no database migrations; the agent shares its container with the workload
+it measures) are listed in [decisions](docs/decisions.md).

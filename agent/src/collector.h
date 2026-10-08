@@ -80,6 +80,21 @@ double effective_cpu_capacity(std::optional<double> limit_cpus, unsigned online_
 double cgroup_cpu_percent(uint64_t prev_usage_usec, uint64_t cur_usage_usec,
                           uint64_t elapsed_usec, double cpu_capacity);
 
+// The value of `key` in a cgroup v2 "key value" file such as cpu.stat or
+// memory.stat (e.g. "inactive_file 847872"), or std::nullopt if it is missing.
+std::optional<uint64_t> parse_cgroup_stat_field(const std::string& text, const std::string& key);
+
+// A cgroup v2 file holding one number, such as memory.current or memory.max.
+// Returns std::nullopt for "max" (no limit) and for malformed input.
+std::optional<uint64_t> parse_cgroup_number(const std::string& text);
+
+// Memory of a cgroup. Used = memory.current - inactive_file: memory.current also
+// counts page cache the kernel can reclaim, so without subtracting it a container
+// that read many files would look full (the same formula as `docker stats`).
+// Total = the cgroup's limit, or the machine's memory if there is no (lower) limit.
+MemInfo cgroup_mem_info(uint64_t current_bytes, uint64_t inactive_file_bytes,
+                        std::optional<uint64_t> limit_bytes, uint64_t machine_total_bytes);
+
 // Reads a whole file into a string. The only function here that touches disk.
 std::optional<std::string> read_file(const std::string& path);
 
@@ -87,9 +102,14 @@ std::optional<std::string> read_file(const std::string& path);
 // Cgroup: only this process's cgroup, i.e. its container (cgroup v2 cpu.stat).
 enum class CpuSource { Proc, Cgroup };
 
-// Collector thread body: every `interval`, reads /proc (and cpu.stat for
-// CpuSource::Cgroup) and pushes a Sample. Returns when `stop` is requested.
+// Where memory is measured. Proc: the whole machine (/proc/meminfo).
+// Cgroup: only this process's cgroup, relative to its memory limit.
+enum class MemSource { Proc, Cgroup };
+
+// Collector thread body: every `interval`, reads /proc (and the cgroup files for
+// the Cgroup sources) and pushes a Sample. Returns when `stop` is requested.
 void run_collector(const std::string& host, ThreadSafeQueue<Sample>& queue, StopFlag& stop,
-                   std::chrono::milliseconds interval, CpuSource cpu_source);
+                   std::chrono::milliseconds interval, CpuSource cpu_source,
+                   MemSource mem_source);
 
 }  // namespace syspulse

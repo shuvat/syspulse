@@ -142,6 +142,66 @@ TEST(CgroupCpuPercent, RelativeToFractionalLimit) {
     EXPECT_DOUBLE_EQ(cgroup_cpu_percent(0, 500'000, 1'000'000, 0.5), 100.0);
 }
 
+// ---------- cgroup v2 memory ----------
+
+TEST(ParseCgroupStatField, FindsKeyInMemoryStat) {
+    // Real lines from /sys/fs/cgroup/memory.stat inside agent-1.
+    const std::string text =
+        "anon 557056\n"
+        "file 1323008\n"
+        "inactive_file 847872\n"
+        "active_file 475136\n";
+    EXPECT_EQ(parse_cgroup_stat_field(text, "inactive_file"), 847872u);
+}
+
+TEST(ParseCgroupStatField, KeyMustMatchExactly) {
+    // "file" must not match "inactive_file" or "active_file".
+    EXPECT_EQ(parse_cgroup_stat_field("inactive_file 5\nfile 7\n", "file"), 7u);
+    EXPECT_FALSE(parse_cgroup_stat_field("inactive_file 5\n", "file").has_value());
+}
+
+TEST(ParseCgroupNumber, ReadsSingleValue) {
+    EXPECT_EQ(parse_cgroup_number("4370432\n"), 4370432u);  // memory.current
+    EXPECT_EQ(parse_cgroup_number("268435456\n"), 268435456u);  // memory.max = 256 MiB
+}
+
+TEST(ParseCgroupNumber, MaxAndMalformedAreNullopt) {
+    EXPECT_FALSE(parse_cgroup_number("max\n").has_value());  // no limit
+    EXPECT_FALSE(parse_cgroup_number("").has_value());
+    EXPECT_FALSE(parse_cgroup_number("12ab\n").has_value());
+    EXPECT_FALSE(parse_cgroup_number("-5\n").has_value());
+}
+
+constexpr uint64_t kMiB = 1024 * 1024;
+
+TEST(CgroupMemInfo, SubtractsReclaimableCache) {
+    // 100 MiB charged, of which 40 MiB is inactive page cache -> 60 MiB used.
+    auto info = cgroup_mem_info(100 * kMiB, 40 * kMiB, 256 * kMiB, 8192 * kMiB);
+    EXPECT_EQ(info.used_mb, 60u);
+    EXPECT_EQ(info.total_mb, 256u);  // The limit, not the machine.
+}
+
+TEST(CgroupMemInfo, NoLimitUsesMachineTotal) {
+    auto info = cgroup_mem_info(100 * kMiB, 0, std::nullopt, 8192 * kMiB);
+    EXPECT_EQ(info.total_mb, 8192u);
+}
+
+TEST(CgroupMemInfo, LimitAboveMachineIsCapped) {
+    auto info = cgroup_mem_info(100 * kMiB, 0, 16384 * kMiB, 8192 * kMiB);
+    EXPECT_EQ(info.total_mb, 8192u);
+}
+
+TEST(CgroupMemInfo, InactiveLargerThanCurrentGivesZeroNotWrapAround) {
+    // The files are read at different instants; unsigned subtraction must not wrap.
+    auto info = cgroup_mem_info(10 * kMiB, 12 * kMiB, 256 * kMiB, 8192 * kMiB);
+    EXPECT_EQ(info.used_mb, 0u);
+}
+
+TEST(CgroupMemInfo, UsedNeverExceedsTotal) {
+    auto info = cgroup_mem_info(300 * kMiB, 0, 256 * kMiB, 8192 * kMiB);
+    EXPECT_EQ(info.used_mb, 256u);
+}
+
 // ---------- cgroup v2 cpu.max ----------
 
 TEST(ParseCgroupCpuLimit, OneCpu) {

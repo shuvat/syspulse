@@ -62,7 +62,7 @@ One JSON object per line (`\n`-terminated):
 | `host` | Agent name (`AGENT_NAME`) |
 | `ts` | Unix time in seconds when the sample was taken |
 | `cpu_percent` | CPU busy share since the previous sample, 0-100. `CPU_SOURCE=proc`: whole machine (100 = every CPU busy). `CPU_SOURCE=cgroup`: the agent's container, relative to its CPU limit (100 = the container uses all it may use) |
-| `mem_used_mb` / `mem_total_mb` | `MemTotal - MemAvailable` / `MemTotal` from `/proc/meminfo` |
+| `mem_used_mb` / `mem_total_mb` | `MEM_SOURCE=proc`: `MemTotal - MemAvailable` / `MemTotal` from `/proc/meminfo` (whole machine). `MEM_SOURCE=cgroup`: `memory.current - inactive_file` / the container's memory limit (`memory.max`), in MiB |
 | `net_rx_bytes` / `net_tx_bytes` | Cumulative byte counters, summed over all interfaces except `lo` |
 
 Network counters are cumulative; rates are computed by the readers from consecutive samples.
@@ -71,7 +71,7 @@ Network counters are cumulative; rates are computed by the readers from consecut
 
 ```mermaid
 flowchart LR
-    PROC[/proc/stat or cgroup cpu.stat<br/>/proc/meminfo<br/>/proc/net/dev/]
+    PROC[/proc/stat or cgroup cpu.stat<br/>/proc/meminfo or cgroup memory.*<br/>/proc/net/dev/]
     C[Collector thread<br/>every 2s]
     Q[[ThreadSafeQueue&lt;Sample&gt;<br/>bounded, 150]]
     S[Sender thread<br/>TCP + reconnect]
@@ -122,6 +122,7 @@ The producer is stopped before the queue is closed, so no collected sample is re
 | `SERVER_HOST` | `127.0.0.1` | Server name or IP (resolved with `getaddrinfo`) |
 | `SERVER_PORT` | `9000` | Server TCP port (1-65535; invalid values exit with an error) |
 | `CPU_SOURCE` | `proc` | `proc`: CPU of the whole machine. `cgroup`: CPU of this container only, relative to its CPU limit (invalid values exit with an error) |
+| `MEM_SOURCE` | `proc` | `proc`: memory of the whole machine. `cgroup`: memory of this container only, relative to its memory limit (invalid values exit with an error) |
 
 ### CPU inside a container
 
@@ -138,8 +139,18 @@ CPU capacity = the container's CPU limit (cpu.max, e.g. "100000 100000" = 1 CPU)
 ```
 
 The agents run with `cpus: "1.0"`, so 100% means "the container uses everything it may use",
-whatever else runs on the machine. Memory still comes from `/proc/meminfo`. See
-`decisions.md` for why (a flaky test) and the trade-offs.
+whatever else runs on the machine. See `decisions.md` for why (a flaky test) and the
+trade-offs.
+
+Memory works the same way with `MEM_SOURCE=cgroup`:
+
+```
+mem_used  = memory.current - inactive_file (memory.stat)   # minus reclaimable page cache
+mem_total = the container's memory limit (memory.max), or the machine's MemTotal if none
+```
+
+The agents run with `mem_limit: 256m`. Without the cgroup files (the root cgroup, e.g. an
+agent outside a container on a systemd host), the agent falls back to `/proc/meminfo`.
 
 ### Build and tests
 
@@ -301,7 +312,8 @@ flowchart LR
 - **Data**: the `pgdata` volume keeps the database across `docker compose down`;
   `docker compose down -v` deletes it (needed after a model change, as there are no migrations).
 - **Agents**: one shared definition (YAML anchor `x-agent`), each with its own `AGENT_NAME`,
-  `CPU_SOURCE=cgroup` and a limit of one CPU (`cpus: "1.0"`).
+  `CPU_SOURCE=cgroup`, `MEM_SOURCE=cgroup`, a limit of one CPU (`cpus: "1.0"`) and 256 MiB of
+  memory (`mem_limit: 256m`).
 
 ### Images
 

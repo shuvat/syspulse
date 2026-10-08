@@ -44,19 +44,53 @@ double cpu_percent(const CpuTimes& prev, const CpuTimes& cur) {
     return std::clamp(percent, 0.0, 100.0);
 }
 
-std::optional<uint64_t> parse_cgroup_cpu_usage(const std::string& cpu_stat) {
+std::optional<uint64_t> parse_cgroup_stat_field(const std::string& text, const std::string& key) {
     // Format: one "key value" pair per line, e.g. "usage_usec 251643".
-    std::istringstream input(cpu_stat);
+    std::istringstream input(text);
     std::string line;
     while (std::getline(input, line)) {
         std::istringstream fields(line);
-        std::string key;
+        std::string name;
         uint64_t value = 0;
-        if (fields >> key >> value && key == "usage_usec") {
+        if (fields >> name >> value && name == key) {
             return value;
         }
     }
     return std::nullopt;
+}
+
+std::optional<uint64_t> parse_cgroup_cpu_usage(const std::string& cpu_stat) {
+    return parse_cgroup_stat_field(cpu_stat, "usage_usec");
+}
+
+std::optional<uint64_t> parse_cgroup_number(const std::string& text) {
+    std::istringstream fields(text);
+    std::string token;
+    if (!(fields >> token) || token == "max") {
+        return std::nullopt;
+    }
+    uint64_t value = 0;
+    auto [end, ec] = std::from_chars(token.data(), token.data() + token.size(), value);
+    if (ec != std::errc() || end != token.data() + token.size()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+MemInfo cgroup_mem_info(uint64_t current_bytes, uint64_t inactive_file_bytes,
+                        std::optional<uint64_t> limit_bytes, uint64_t machine_total_bytes) {
+    constexpr uint64_t kMiB = 1024 * 1024;
+    // The two files are not read at the same instant, so guard the subtraction:
+    // unsigned math would wrap around to a huge number.
+    uint64_t used = current_bytes > inactive_file_bytes ? current_bytes - inactive_file_bytes : 0;
+    uint64_t total = machine_total_bytes;
+    if (limit_bytes && *limit_bytes < machine_total_bytes) {
+        total = *limit_bytes;
+    }
+    MemInfo info;
+    info.total_mb = total / kMiB;
+    info.used_mb = std::min(used, total) / kMiB;
+    return info;
 }
 
 std::optional<double> parse_cgroup_cpu_limit(const std::string& cpu_max) {
@@ -231,9 +265,31 @@ double cpu_percent_between(CpuSource source, const CpuReading& prev, const CpuRe
                               static_cast<uint64_t>(elapsed.count()), cur.cpu_capacity);
 }
 
-std::optional<MemInfo> read_meminfo() {
+std::optional<MemInfo> read_meminfo(MemSource source) {
     auto text = read_file("/proc/meminfo");
-    return text ? parse_meminfo(*text) : std::nullopt;
+    auto machine = text ? parse_meminfo(*text) : std::nullopt;
+    if (source == MemSource::Proc || !machine) {
+        return machine;
+    }
+    // Cgroup: /proc/meminfo is still needed for the machine total, used when the
+    // cgroup has no memory limit.
+    auto current_text = read_file("/sys/fs/cgroup/memory.current");
+    auto stat_text = read_file("/sys/fs/cgroup/memory.stat");
+    if (!current_text || !stat_text) {
+        // The root cgroup has no memory.current (e.g. an agent outside a container on
+        // a systemd host): the root cgroup is the whole machine.
+        return machine;
+    }
+    auto current = parse_cgroup_number(*current_text);
+    auto inactive = parse_cgroup_stat_field(*stat_text, "inactive_file");
+    if (!current || !inactive) {
+        return std::nullopt;
+    }
+    // Read on every sample, like cpu.max: the limit can change at runtime.
+    // A missing file (e.g. the root cgroup) or "max" means no limit.
+    auto max_text = read_file("/sys/fs/cgroup/memory.max");
+    auto limit = max_text ? parse_cgroup_number(*max_text) : std::nullopt;
+    return cgroup_mem_info(*current, *inactive, limit, machine->total_mb * 1024 * 1024);
 }
 
 std::optional<NetCounters> read_net_dev() {
@@ -249,13 +305,14 @@ int64_t unix_time_now() {
 }  // namespace
 
 void run_collector(const std::string& host, ThreadSafeQueue<Sample>& queue, StopFlag& stop,
-                   std::chrono::milliseconds interval, CpuSource cpu_source) {
+                   std::chrono::milliseconds interval, CpuSource cpu_source,
+                   MemSource mem_source) {
     // CPU % needs two readings, so the first one is only a baseline.
     std::optional<CpuReading> prev_cpu = read_cpu(cpu_source);
 
     while (!stop.wait_for(interval)) {
         auto cpu = read_cpu(cpu_source);
-        auto mem = read_meminfo();
+        auto mem = read_meminfo(mem_source);
         auto net = read_net_dev();
 
         if (!prev_cpu || !cpu || !mem || !net) {

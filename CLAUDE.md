@@ -43,7 +43,7 @@ Docker, observability, and GDB/valgrind.
    - Graceful shutdown on SIGINT/SIGTERM.
    - Parsing functions take `std::string` input (not file paths) so they are unit-testable.
    - Libraries: nlohmann/json, GoogleTest (both via CMake FetchContent).
-   - Config via env vars: SERVER_HOST, SERVER_PORT, AGENT_NAME, CPU_SOURCE (proc|cgroup).
+   - Config via env vars: SERVER_HOST, SERVER_PORT, AGENT_NAME, CPU_SOURCE and MEM_SOURCE (proc|cgroup).
 2. **server/** (Python): asyncio TCP ingest on port 9000 started inside FastAPI lifespan;
    REST API on port 8000; SQLModel/SQLAlchemy + PostgreSQL; anomaly rules as pure functions.
 3. **mcp_server/** (Python, official MCP SDK `mcp` 2.x, `MCPServer` = old FastMCP): tools that call the REST API.
@@ -131,7 +131,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
   - [x] `cpu_high` flapping -> hysteresis (end below 80% for 3 samples)
   - [x] false `host_silent` after the machine sleeps (watcher skips a round if it was paused)
   - [x] `compare_hosts` average dilutes fresh spikes (rank by latest/max)
-  - [ ] memory per container from cgroup (memory.current / memory.max)
+  - [x] memory per container from cgroup (memory.current / memory.max)
 - [ ] Update CV + LinkedIn
 - [ ] Prepare answers: TCP vs UDP, mutex vs condition variable, CPU % from /proc/stat,
       PostgreSQL vs MongoDB, how MCP works (tool vs resource), what CI checks, scaling to 1000 hosts
@@ -185,7 +185,11 @@ host_silent before, 0 after; `docker compose stop agent-3` 45 s -> host_silent f
 Fixes 1+2 committed (57ab948). Fix 3 done (not committed): `compare_hosts(..., rank_by=avg|max|latest)`,
 default avg; 22 MCP tests pass. Note: a running Claude Code session keeps the old MCP server process
 until the session (or /mcp server) restarts.
-Next: Day 7 fix 4 - memory per container from cgroup (memory.current / memory.max), C++ agent.
+Fix 3 committed. Fix 4 done (not committed): MEM_SOURCE=cgroup (used = memory.current - inactive_file,
+total = memory.max or MemTotal; root cgroup without memory.current -> /proc/meminfo), compose
+`mem_limit: 256m`. 61 GoogleTest tests pass, valgrind clean. Live: ~1 MiB/256 per agent idle; holding
+235 MiB in agent-1 -> 93% + one memory_high for agent-1 only. Integration test passes.
+Next: more Day 7 improvements (Claude chooses), then interview prep.
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -208,7 +212,9 @@ Next: Day 7 fix 4 - memory per container from cgroup (memory.current / memory.ma
   (`usage_usec`) and divides by elapsed `steady_clock` time x CPU capacity. Capacity = limit from
   `/sys/fs/cgroup/cpu.max` (read every sample; "max" or missing file = no limit), capped at
   `hardware_concurrency()`. Compose gives each agent `cpus: "1.0"`.
-  Memory still comes from `/proc/meminfo` (whole machine).
+- `MEM_SOURCE=proc|cgroup` (default proc): used = memory.current - inactive_file (memory.stat), total =
+  memory.max or MemTotal; no memory.current (root cgroup) -> /proc/meminfo. Compose: `mem_limit: 256m`.
+  Memory load test: `docker compose exec -T agent-1 sh -c '{ head -c 235m /dev/zero; sleep 20; } | tail > /dev/null'`.
 - Load test uses shell busy loops, not stress-ng: stress-ng in the image added ~340MB (Mesa/LLVM).
 
 ### Server notes (decisions made during Day 2)
@@ -258,7 +264,7 @@ Next: Day 7 fix 4 - memory per container from cgroup (memory.current / memory.ma
 - Quick in-process check: `asyncio.run(mcp.call_tool(name, args))` -> `.structured_content`.
 - `claude` CLI is not on PATH; use the extension's binary:
   `~/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude mcp list`.
-- Known limit: `mem_percent` identical across agents (memory from /proc/meminfo, whole machine).
+- `mem_percent` is per container since Day 7 (MEM_SOURCE=cgroup).
 - Tests: `cd mcp_server && .venv/bin/pytest` (dev deps: `requirements-dev.txt`, pytest 9.1.1).
   The `api` fixture swaps `server.client` for an `httpx2.Client` with `MockTransport`; tools are
   called via `asyncio.run(mcp.call_tool(...))` (no pytest-asyncio needed).

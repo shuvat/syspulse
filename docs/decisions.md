@@ -215,7 +215,7 @@
   Explicit config, not auto-detection, so behavior is predictable.
 - Why: with `/proc/stat` a load in one container raised the CPU of all three agents, so
   "which host is overloaded?" had no meaningful answer.
-- Known limit: memory still comes from `/proc/meminfo` (whole machine).
+- Memory got the same treatment on Day 7 (see "Per-container memory from cgroup v2").
 
 ## CPU percent relative to the container's CPU limit
 - Problem found while writing the integration test: under the same load, agent-1 reported
@@ -269,8 +269,8 @@
 - Error handling: expected failures raise `ToolError`, so the model sees the message and can
   recover. Any other exception reaches the model only as "Error executing tool" (no
   internal details leak).
-- Known limit: `mem_percent` is the same for all agents, because memory still comes from
-  `/proc/meminfo` (whole machine); the cgroup's `memory.current` would fix it, like CPU.
+- `mem_percent` used to be the same for all agents (memory from `/proc/meminfo`, the whole
+  machine); since Day 7 it is per container, so comparing memory between hosts is meaningful.
 - `compare_hosts` takes `rank_by` (`avg`, `max`, `latest`; added on Day 7). In the demo, the
   10-minute average hid a load that had started a minute before (avg 4.6%, max 98.5%). The
   default stays `avg`, so existing calls behave the same; the docstring tells the model to
@@ -372,3 +372,26 @@
 - Valgrind instead of AddressSanitizer: no special build, and the same Debug binary is used.
   ASan is faster and also finds stack and global buffer overflows, but needs its own build
   (and cannot be combined with TSan in one build). TSan was already used for data races.
+
+## Per-container memory from cgroup v2 (MEM_SOURCE)
+- The last "whole machine" metric: `/proc/meminfo` is not namespaced, so every agent reported
+  the same memory (about 47% of the WSL VM) and the memory rule could never point at a host.
+- `MEM_SOURCE=cgroup` (a separate variable from `CPU_SOURCE`, so the meaning of the existing
+  one does not change): used = `memory.current - inactive_file`, total = `memory.max`.
+- Why subtract `inactive_file`: `memory.current` also counts page cache, which the kernel can
+  reclaim when needed. Without subtracting it, a container that read many files would look
+  full. It is the same formula `docker stats` uses, and the same idea as choosing
+  `MemAvailable` over `MemFree` on Day 1.
+- Total is the limit (Compose: `mem_limit: 256m` per agent), or the machine's `MemTotal` when
+  there is no lower limit, like the CPU capacity.
+- The root cgroup has no `memory.current` (the kernel only creates it in child cgroups), so an
+  agent outside a container on a systemd host falls back to `/proc/meminfo`: the root cgroup
+  is the whole machine. A file that exists but cannot be parsed is still an error.
+- Checked live: holding 235 MiB in agent-1 gave 93% for agent-1 only and one `memory_high`,
+  the first time the memory rule fired for real. 250 MB is below the 256 MiB limit, so the
+  OOM killer did not act.
+- Trade-off: near the limit, the kernel reclaims cache and then OOM-kills the biggest process
+  in the container. The agent shares the container with the workload, so a runaway workload
+  can get the agent killed too; in production the agent would run outside the workload's cgroup
+  (a DaemonSet in Kubernetes) and read all cgroups.
+
