@@ -20,6 +20,10 @@
 - One thread collects samples every 2s, another sends them.
 - Why: slow network should not delay sampling. Queue is protected by
   std::mutex + std::condition_variable.
+- Rule: a public method of the queue locks the mutex and never calls another public method
+  while holding it (`std::mutex` is not recursive). Breaking it causes a self-deadlock, shown
+  with GDB in [debugging.md](debugging.md). `std::recursive_mutex` would hide the problem
+  instead of fixing the design.
 
 ## Bounded queue that drops the oldest sample
 - Capacity is 150 samples (5 minutes at 2s). When full, `push()` drops the oldest item.

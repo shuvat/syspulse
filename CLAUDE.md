@@ -122,7 +122,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 ### Day 6 - Dashboard, debugging, README
 - [x] Streamlit dashboard added to compose
 - [x] valgrind --leak-check=full on agent -> no leaks
-- [ ] GDB session (breakpoints, info threads, backtrace, planted bug) -> docs/debugging.md
+- [x] GDB session (breakpoints, info threads, backtrace, planted bug) -> docs/debugging.md
 - [ ] README: one-line pitch, demo video, diagram, tech stack, 3-command quick start
 
 ### Day 7 - Buffer, polish, interview prep
@@ -159,8 +159,12 @@ http://localhost:8501; 11 pytest tests (pure functions + AppTest) pass; CI has a
 Not pushed yet.
 Dashboard committed (331fc85). Valgrind: real agent (incl. reconnect + SIGINT) and agent_tests
 are clean (0 bytes in use at exit, 0 errors); planted leak was caught (collector.cpp line, exit 1)
-and removed. CI `cpp` job now also runs agent_tests under valgrind (not pushed yet).
-Next: Day 6, step 3 - GDB session (breakpoints, info threads, backtrace, planted bug).
+and removed. CI `cpp` job now also runs agent_tests under valgrind - green on GitHub.
+GDB done (docs/debugging.md): healthy-agent session (3 threads, print sample, conditional
+breakpoint + finish) and a planted self-deadlock in ThreadSafeQueue::push (size() under the lock),
+diagnosed with thread apply all bt + mutex owner LWP; bug removed, 52 tests pass. Not committed yet.
+Shuvat should also run the interactive "Try it yourself" session herself (interview prep).
+Next: Day 6, step 4 - README (pitch, demo, diagram, tech stack, 3-command quick start).
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -173,6 +177,9 @@ Next: Day 6, step 3 - GDB session (breakpoints, info threads, backtrace, planted
 - Dependencies (pinned, FetchContent): nlohmann/json v3.12.0, GoogleTest v1.17.0 (gmock off).
 - `gtest_discover_tests` uses `DISCOVERY_MODE PRE_TEST`.
 - TSan on this WSL kernel needs ASLR off: `setarch -R ./build-tsan/agent_tests`.
+- GDB: `ptrace_scope=1` here, so `gdb -p` needs sudo; start the agent under gdb instead. In
+  `gdb -batch`, stop a running program with an external signal (`handle SIGUSR1 stop print nopass`);
+  SIGINT is blocked by the agent. Mutex owner: `print mutex_._M_mutex.__data.__owner` (LWP).
 - Valgrind: `valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1
   ./build/agent_tests` (~4s, clean). `build/` is Debug by default (`-g`). For the real agent,
   run against `nc -lk 9000`; check no stray `nc` first (`pgrep -a nc`, SO_REUSEPORT).

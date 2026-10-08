@@ -264,7 +264,168 @@ aborting: temp-path '.' must be readable and writeable
 
 ## GDB
 
-*(Day 6: breakpoints, `info threads`, `thread apply all bt`, planted bug.)*
+Build: `agent/build` is Debug (`-g`, no optimization), so GDB shows source lines and
+variables. The sessions below were recorded with `gdb -batch -x <commands file>`; the same
+commands work interactively (see "Try it yourself").
+
+### Session 1: the healthy agent
+
+```gdb
+break collector.cpp:275        # right before a sample enters the queue
+run
+info threads
+print sample
+```
+
+```
+Thread 2 "syspulse_agent" hit Breakpoint 1, syspulse::run_collector (host="agent-gdb", ...,
+    interval=std::chrono::duration = { 2000ms }, cpu_source=syspulse::CpuSource::Cgroup) at collector.cpp:275
+275	        queue.push(std::move(sample));
+
+  Id   Target Id                                   Frame
+  1    Thread ... (LWP 60246) "syspulse_agent" __GI___sigtimedwait (...)          <- main: sigwait()
+* 2    Thread ... (LWP 60249) "syspulse_agent" syspulse::run_collector (...)      <- collector (stopped here)
+  3    Thread ... (LWP 60250) "syspulse_agent" __futex_abstimed_wait_common64 ()  <- sender: waiting in pop()
+
+$1 = {
+  host = "agent-gdb", ts = 1791446847, cpu_percent = 13.983709435439401,
+  mem_used_mb = 3805, mem_total_mb = 7792, net_rx_bytes = 274205444, net_tx_bytes = 37245471
+}
+```
+
+The three threads match the design: main waits for a signal, the sender waits on the queue's
+condition variable, the collector works. A breakpoint stops only the thread that hits it
+from GDB's point of view (`*` marks the current thread), but in all-stop mode every thread
+is paused.
+
+Conditional breakpoint: stop only when the cgroup used more than 1 second of CPU in one
+interval (a busy loop was running in the background):
+
+```gdb
+break cgroup_cpu_percent if cur_usage_usec - prev_usage_usec > 1000000
+continue
+info args
+finish
+```
+
+```
+prev_usage_usec = 2369145494
+cur_usage_usec = 2371619572
+elapsed_usec = 2176599
+cpu_capacity = 8
+Run till exit ...
+Value returned is $3 = 14.208393461542526
+```
+
+2.47 s of CPU in 2.18 s on 8 CPUs = 14.2%. `finish` runs to the end of the function and
+prints its return value: the formula can be checked by hand against real inputs.
+
+### Session 2: a planted deadlock
+
+Planted bug in `ThreadSafeQueue::push()`, inside the locked block:
+
+```cpp
+std::lock_guard<std::mutex> lock(mutex_);
+...
+if (size() >= capacity_) {  // PLANTED BUG: size() locks mutex_ again
+```
+
+It compiles without a warning. Symptom, without a debugger: `nc` receives 0 lines, the agent
+log shows no error, the process is in state `Sl` at 0.1% CPU (waiting, not spinning), and it
+**ignores SIGTERM**: main calls `collector.join()`, which never returns. In Docker that means
+`docker stop` waits 10 seconds and then kills it (exit 137).
+
+Attaching to the running process failed:
+
+```
+Could not attach to process.  If your uid matches the uid of the target
+process, check the setting of /proc/sys/kernel/yama/ptrace_scope, or try
+again as the root user.
+```
+
+`ptrace_scope=1` (Ubuntu default, Yama LSM): a process may only be traced by its parent (or
+root). Otherwise any program of the same user could read another one's memory (passwords,
+tokens). So the agent was started under GDB, and stopped after 5 seconds with a signal
+(`handle SIGUSR1 stop print nopass`; interactively, Ctrl+C does the same).
+
+```gdb
+info threads
+thread apply all bt 8
+```
+
+```
+Thread 3 (LWP 60531):                                    <- sender
+#3  __pthread_cond_wait_common (mutex=0x7fffffffd3c0, cond=0x7fffffffd3e8)
+#6  syspulse::ThreadSafeQueue<syspulse::Sample>::pop (this=0x7fffffffd3c0) at queue.h:49
+#7  syspulse::run_sender (...) at sender.cpp:98
+
+Thread 2 (LWP 60530):                                    <- collector
+#0  futex_wait (private=0, expected=2, futex_word=0x7fffffffd3c0)
+#1  __GI___lll_lock_wait (futex=0x7fffffffd3c0, private=0)
+#5  std::mutex::lock (this=0x7fffffffd3c0)
+#7  syspulse::ThreadSafeQueue<syspulse::Sample>::size (this=0x7fffffffd3c0) at queue.h:68
+
+Thread 1 (LWP 60527):                                    <- main
+#2  main () at main.cpp:96                               (sigwait)
+```
+
+The collector is blocked locking the queue's mutex (`0x7fffffffd3c0`, the same address as the
+queue: the mutex is its first member). The sender waits for an item that never comes.
+Who holds the mutex?
+
+```gdb
+thread 2
+frame 8
+print mutex_._M_mutex.__data.__owner
+```
+
+```
+#8  syspulse::ThreadSafeQueue<syspulse::Sample>::push (...) at queue.h:31
+31	            if (size() >= capacity_) {  // PLANTED BUG: size() locks mutex_ again
+$1 = 60622
+* 2    Thread 0x7ffff77ff6c0 (LWP 60622) "syspulse_agent" futex_wait (...)
+```
+
+The owner (LWP 60622) is the waiting thread itself: a **self-deadlock**. `push()` holds the
+lock and calls `size()`, which locks the same non-recursive `std::mutex` again.
+(`_M_mutex` is the `pthread_mutex_t` inside `std::mutex`; glibc stores the owner's thread id.)
+Fix: use `items_.size()` directly inside the locked block. Then the bug was removed (no diff).
+
+Fixing it with `std::recursive_mutex` would hide the design problem: the usual rule is that
+public methods lock and are never called while the lock is held.
+
+### Try it yourself (interactive)
+
+```bash
+cd ~/syspulse/agent
+nc -lk 9000 > /dev/null &          # receiver
+gdb ./build/syspulse_agent
+```
+
+```gdb
+(gdb) break collector.cpp:275
+(gdb) run
+(gdb) info threads
+(gdb) bt
+(gdb) print sample
+(gdb) next                  # one line, without entering functions
+(gdb) continue
+(gdb) delete                # remove all breakpoints
+(gdb) continue
+^C                          # Ctrl+C stops every thread
+(gdb) thread apply all bt
+(gdb) quit
+```
+
+`kill %1` stops `nc` afterwards.
+
+### Gotchas
+
+- `interrupt` after `run &` does not stop the program in `gdb -batch` ("Selected thread is
+  running"); a signal from outside does (`handle SIGUSR1 stop print nopass`). SIGINT cannot be
+  used for that here: the agent blocks it (for `sigwait`), so it is never delivered.
+- `cd dir && nc ... & NC=$!`: `$!` is the PID of the subshell running the whole `&&` chain,
+  not of `nc`; `kill $NC` left `nc` running. Run background commands on their own line.
 
 ## Valgrind (memory leaks and invalid memory access)
 
