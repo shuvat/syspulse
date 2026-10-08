@@ -5,11 +5,15 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.anomalies import (
+    Finding,
     check_cpu,
+    check_cpu_unusual,
     check_memory,
     check_silence,
+    cpu_baseline,
     cpu_event_open,
     memory_percent,
+    unusual_event_open,
     watcher_was_paused,
 )
 
@@ -116,3 +120,76 @@ T0 = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
 )
 def test_watcher_was_paused(previous_run: datetime | None, now: datetime, paused: bool) -> None:
     assert watcher_was_paused(previous_run, now) == paused
+
+
+# ---------- statistical rule: cpu_unusual ----------
+
+# A quiet host: 40 samples around 5% (small noise), i.e. more than the 30 needed.
+QUIET = [4.0, 5.0, 6.0, 5.0] * 10
+
+
+def unusual(recent: list[float], event_open: bool = False) -> Finding | None:
+    return check_cpu_unusual(recent, cpu_baseline(recent), event_open)
+
+
+def test_unusual_fires_on_jump_that_threshold_rule_misses() -> None:
+    recent = QUIET + [60.0, 60.0, 60.0]
+
+    finding = unusual(recent)
+
+    assert finding is not None
+    assert finding.type == "cpu_unusual"
+    assert "above this host's recent mean (5.0%)" in finding.message
+    # The fixed threshold rule stays quiet: 60% is not "high".
+    assert check_cpu(recent, event_open=False) is None
+
+
+def test_unusual_needs_three_consecutive_samples() -> None:
+    assert unusual(QUIET + [60.0, 60.0]) is None  # only 2 high samples
+    assert unusual(QUIET + [60.0, 5.0, 60.0]) is None  # not consecutive
+
+
+def test_unusual_ignores_noisy_host() -> None:
+    # A host that swings between 20% and 80% (std 30): 90% is only 1.3 std devs above.
+    noisy = [20.0, 80.0] * 20
+    assert unusual(noisy + [90.0, 90.0, 90.0]) is None
+
+
+def test_unusual_std_floor_protects_constant_host() -> None:
+    # Always exactly 0%: std is 0, floored to 5 points.
+    flat = [0.0] * 40
+    assert unusual(flat + [3.0, 3.0, 3.0]) is None  # 0.6 floored std devs: noise
+    assert unusual(flat + [20.0, 20.0, 20.0]) is not None  # 4 floored std devs
+
+
+def test_unusual_needs_enough_history() -> None:
+    # A new host: 20 samples of baseline are not enough to judge.
+    assert cpu_baseline([5.0] * 20 + [60.0, 60.0, 60.0]) is None
+    assert unusual([5.0] * 20 + [60.0, 60.0, 60.0]) is None
+
+
+def test_unusual_reports_only_rises() -> None:
+    assert unusual([60.0] * 40 + [0.0, 0.0, 0.0]) is None
+
+
+def test_unusual_quiet_while_event_open() -> None:
+    assert unusual(QUIET + [60.0, 60.0, 60.0], event_open=True) is None
+
+
+def test_baseline_excludes_the_samples_being_judged() -> None:
+    avg, _ = cpu_baseline(QUIET + [60.0, 60.0, 60.0])
+    assert avg == 5.0
+
+
+@pytest.mark.parametrize(
+    ("cpu_since_alert", "is_open"),
+    [
+        (None, False),  # never had a cpu_unusual anomaly
+        ([60.0, 60.0, 60.0], True),  # still far from the 5% baseline
+        ([60.0, 5.0, 5.0], True),  # only 2 samples back to normal
+        ([60.0, 5.0, 6.0, 4.0], False),  # 3 samples within 1 std dev: ended
+    ],
+)
+def test_unusual_event_open(cpu_since_alert: list[float] | None, is_open: bool) -> None:
+    assert unusual_event_open(cpu_since_alert, (5.0, 5.0)) == is_open
+

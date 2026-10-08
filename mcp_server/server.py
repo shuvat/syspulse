@@ -119,10 +119,12 @@ def get_host_metrics(host: str, minutes: Minutes = 10) -> list[dict[str, Any]]:
 def find_anomalies(minutes: Minutes = 60) -> list[dict[str, Any]]:
     """List anomalies across all hosts from the last `minutes`, newest first.
 
-    Types: cpu_high (CPU above 90% for 3 consecutive samples), memory_high (memory use
-    above 90%), host_silent (no data for more than 30 seconds). Each anomaly is recorded
-    once, when the condition starts, not for every sample while it lasts; `value` is the
-    measurement that triggered it.
+    Types: cpu_high (CPU above 90% for 3 consecutive samples), cpu_unusual (CPU at least
+    3 standard deviations above this host's own recent mean for 3 samples: a change in
+    behavior even below 90%), memory_high (memory use above 90%), host_silent (no data
+    for more than 30 seconds). CPU and memory are relative to each container's limits.
+    Each anomaly is recorded once, when the condition starts, not for every sample while
+    it lasts; `value` is the measurement that triggered it.
     """
     return api_get("/anomalies", {"minutes": minutes})
 

@@ -68,6 +68,7 @@ GET /health, GET /hosts, GET /hosts/{name}/metrics?minutes=10, GET /anomalies?mi
 
 ### Anomaly rules
 - CPU > 90% for 3 consecutive samples (hysteresis: event ends after 3 samples < 80%)
+- CPU unusual: >= 3 std devs above the host's own recent mean for 3 samples (z-score, Day 7)
 - Memory usage > 90%
 - Host silent for more than 30 seconds
 
@@ -126,7 +127,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] README: one-line pitch, demo screenshots, diagram, tech stack, 3-command quick start
 
 ### Day 7 - Buffer, polish, interview prep
-- [ ] Finish leftovers; optional statistical anomaly rule (mean + std dev)
+- [x] Finish leftovers; optional statistical anomaly rule (mean + std dev) -> `cpu_unusual`
 - [ ] Optional fixes found in the MCP demo (docs/mcp_demo.md), one step each:
   - [x] `cpu_high` flapping -> hysteresis (end below 80% for 3 samples)
   - [x] false `host_silent` after the machine sleeps (watcher skips a round if it was paused)
@@ -192,7 +193,12 @@ total = memory.max or MemTotal; root cgroup without memory.current -> /proc/memi
 Fix 4 committed (2d72e18). Improvement: `LOAD=memory ./scripts/load_test.sh` (holds 92% of
 memory.max -> memory_high for agent-1 only); integration test now has 5 steps (CPU + memory) and
 passes in ~45 s. Not committed yet.
-Next: Day 7 improvement 2 - statistical anomaly rule (mean + std dev), then interview prep.
+Memory load test committed (97a5de0). Statistical rule done (not committed): `cpu_unusual` (z >= 3 vs
+the host's last ~5 min without the last 3 samples; >= 30 samples history; std floor 5 points; event
+ends when |z| < 1 for 3 samples; `_has_quiet_run` shared with the CPU hysteresis). 82 server tests,
+22 MCP tests pass; find_anomalies docstring lists the new type. Live: ~50% duty-cycle load -> one
+cpu_unusual (z 10.3), no cpu_high. Integration test passes.
+Next: interview prep (the questions list), or more polish if Shuvat wants.
 Shuvat may record docs/media/dashboard.gif (ScreenToGif, 5 FPS, <5 MB) -> replace the PNG in README.
 
 ### Agent notes (decisions made during Day 1)

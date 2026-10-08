@@ -7,14 +7,25 @@ stays below the lower CPU_CLEAR_THRESHOLD, so short dips do not split one event
 into many (flapping).
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from statistics import mean, pstdev
 
 CPU_THRESHOLD = 90.0  # percent: a CPU event starts above this...
 CPU_STREAK = 3  # ...for this many consecutive samples.
 CPU_CLEAR_THRESHOLD = 80.0  # percent: the event ends below this...
 CPU_CLEAR_STREAK = 3  # ...for this many consecutive samples.
 MEM_THRESHOLD = 90.0  # percent
+
+# Statistical rule: CPU far above this host's own recent behavior (z-score).
+UNUSUAL_Z = 3.0  # standard deviations above the host's mean...
+UNUSUAL_STREAK = 3  # ...for this many consecutive samples.
+UNUSUAL_CLEAR_Z = 1.0  # the event ends when CPU is back within 1 std dev for UNUSUAL_STREAK samples
+UNUSUAL_MIN_BASELINE = 30  # samples (1 minute) of history needed before judging
+# Floor for the standard deviation, in percentage points: a host that sits at exactly 0%
+# has std 0, and without a floor any 1% change would be "infinitely" unusual.
+UNUSUAL_MIN_STD = 5.0
 SILENCE_LIMIT = timedelta(seconds=30)
 # The silence watcher runs every 5 s. Much more wall-clock time between two of its rounds
 # means the watcher itself was not running (machine asleep, VM or container frozen).
@@ -34,6 +45,16 @@ class Finding:
     message: str
 
 
+def _has_quiet_run(quiet: Iterable[bool], length: int) -> bool:
+    """Whether `quiet` contains `length` consecutive True values (an event has ended)."""
+    run = 0
+    for is_quiet in quiet:
+        run = run + 1 if is_quiet else 0
+        if run >= length:
+            return True
+    return False
+
+
 def cpu_event_open(cpu_since_alert: list[float] | None) -> bool:
     """Whether the host's last cpu_high event is still going on.
 
@@ -43,12 +64,8 @@ def cpu_event_open(cpu_since_alert: list[float] | None) -> bool:
     """
     if cpu_since_alert is None:
         return False
-    run = 0
-    for cpu in cpu_since_alert:
-        run = run + 1 if cpu < CPU_CLEAR_THRESHOLD else 0
-        if run >= CPU_CLEAR_STREAK:
-            return False
-    return True
+    quiet = (cpu < CPU_CLEAR_THRESHOLD for cpu in cpu_since_alert)
+    return not _has_quiet_run(quiet, CPU_CLEAR_STREAK)
 
 
 def check_cpu(recent_cpu: list[float], event_open: bool) -> Finding | None:
@@ -68,6 +85,58 @@ def check_cpu(recent_cpu: list[float], event_open: bool) -> Finding | None:
         value=streak[-1],
         message=f"CPU above {CPU_THRESHOLD:g}% for {CPU_STREAK} consecutive samples "
         f"(now {streak[-1]:.1f}%)",
+    )
+
+
+def cpu_baseline(recent_cpu: list[float]) -> tuple[float, float] | None:
+    """Mean and standard deviation of the host's usual CPU, or None without enough history.
+
+    The baseline is every sample except the last UNUSUAL_STREAK: otherwise the change
+    being judged would raise the mean and hide itself. The standard deviation is floored
+    at UNUSUAL_MIN_STD.
+    """
+    baseline = recent_cpu[:-UNUSUAL_STREAK]
+    if len(baseline) < UNUSUAL_MIN_BASELINE:
+        return None
+    return mean(baseline), max(pstdev(baseline), UNUSUAL_MIN_STD)
+
+
+def unusual_event_open(
+    cpu_since_alert: list[float] | None, baseline: tuple[float, float] | None
+) -> bool:
+    """Whether the host's last cpu_unusual event is still going on.
+
+    It ends once CPU has been within UNUSUAL_CLEAR_Z standard deviations of the
+    baseline for UNUSUAL_STREAK consecutive samples. The baseline includes recent
+    samples, so a change that lasts becomes the new normal and the event ends too.
+    """
+    if cpu_since_alert is None or baseline is None:
+        return False
+    avg, std = baseline
+    quiet = (abs(cpu - avg) / std < UNUSUAL_CLEAR_Z for cpu in cpu_since_alert)
+    return not _has_quiet_run(quiet, UNUSUAL_STREAK)
+
+
+def check_cpu_unusual(
+    recent_cpu: list[float], baseline: tuple[float, float] | None, event_open: bool
+) -> Finding | None:
+    """Fire when CPU is far above this host's own recent behavior (z-score >= UNUSUAL_Z).
+
+    Catches what a fixed threshold misses: a host that usually sits at 5% and jumps to
+    60% has changed, although 60% is not "high". Only rises are reported.
+    """
+    if event_open or baseline is None:
+        return None
+    avg, std = baseline
+    streak = recent_cpu[-UNUSUAL_STREAK:]
+    z_scores = [(cpu - avg) / std for cpu in streak]
+    if not all(z >= UNUSUAL_Z for z in z_scores):
+        return None
+    return Finding(
+        type="cpu_unusual",
+        value=streak[-1],
+        message=f"CPU {streak[-1]:.1f}% is {z_scores[-1]:.1f} standard deviations above "
+        f"this host's recent mean ({avg:.1f}%)",
     )
 
 

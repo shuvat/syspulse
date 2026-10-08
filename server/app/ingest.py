@@ -12,9 +12,12 @@ from sqlmodel import Session, col, func, select
 from app.anomalies import (
     SAMPLES_NEEDED,
     check_cpu,
+    check_cpu_unusual,
     check_memory,
+    cpu_baseline,
     cpu_event_open,
     memory_percent,
+    unusual_event_open,
 )
 from app.db import engine
 from app.models import Anomaly, Host, Metric
@@ -96,19 +99,25 @@ def store_message(msg: MetricMessage) -> None:
 
         # Hysteresis state is derived from stored data, not kept in a column: the last
         # cpu_high anomaly of this host and the samples after it.
-        last_cpu_alert = session.exec(
-            select(func.max(Anomaly.ts)).where(
-                Anomaly.host_id == host_id, Anomaly.type == "cpu_high"
-            )
-        ).one()
-        cpu_since_alert = (
-            None
-            if last_cpu_alert is None
-            else [m.cpu_percent for m in recent if m.ts > last_cpu_alert]
-        )
+        # Event state is derived from stored data, not kept in a column: the host's last
+        # anomaly of a type and the samples after it (hysteresis, one anomaly per event).
+        def cpu_since_last(anomaly_type: str) -> list[float] | None:
+            last_alert = session.exec(
+                select(func.max(Anomaly.ts)).where(
+                    Anomaly.host_id == host_id, Anomaly.type == anomaly_type
+                )
+            ).one()
+            if last_alert is None:
+                return None
+            return [m.cpu_percent for m in recent if m.ts > last_alert]
 
+        recent_cpu = [m.cpu_percent for m in recent]
+        baseline = cpu_baseline(recent_cpu)
         findings = [
-            check_cpu([m.cpu_percent for m in recent], cpu_event_open(cpu_since_alert)),
+            check_cpu(recent_cpu, cpu_event_open(cpu_since_last("cpu_high"))),
+            check_cpu_unusual(
+                recent_cpu, baseline, unusual_event_open(cpu_since_last("cpu_unusual"), baseline)
+            ),
             check_memory([memory_percent(m.mem_used_mb, m.mem_total_mb) for m in recent]),
         ]
         for finding in findings:

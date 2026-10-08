@@ -161,3 +161,16 @@ def test_silence_reported_once_per_silence(session: Session) -> None:
     assert anomaly_types(session) == ["host_silent"]
     record_silent_hosts(now=t0 + timedelta(seconds=100))
     assert anomaly_types(session) == ["host_silent", "host_silent"]
+
+
+def test_lasting_cpu_change_creates_one_unusual_anomaly(
+    session: Session, make_msg: MakeMsg
+) -> None:
+    # A host at ~5% for 40 samples, then at 60% for 20 samples: one cpu_unusual (not one per
+    # sample), and no cpu_high, because 60% is below the fixed threshold.
+    pattern = [4.0, 5.0, 6.0, 5.0] * 10 + [60.0] * 20
+    for i, cpu in enumerate(pattern):
+        store_message(make_msg(ts=1_760_000_000 + 2 * i, cpu_percent=cpu))
+
+    assert anomaly_types(session) == ["cpu_unusual"]
+

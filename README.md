@@ -20,7 +20,9 @@ detects anomalies, with a live dashboard and an MCP server that lets Claude answ
   its container's cgroup, and streams newline-delimited JSON over TCP. A collector thread and
   a sender thread share a bounded queue; the sender reconnects with exponential backoff.
 - **Server (Python):** an asyncio TCP ingest and a FastAPI REST API in one process. Samples go
-  to PostgreSQL; anomaly rules (CPU, memory, silent host) run on every sample.
+  to PostgreSQL; anomaly rules run on every sample: fixed thresholds (CPU with hysteresis,
+  memory), a statistical rule (CPU far above the host's own recent behavior, by z-score),
+  and a silent-host watcher.
 - **Dashboard (Streamlit):** hosts, live CPU and memory charts, and anomalies.
 - **MCP server:** four tools (`list_hosts`, `get_host_metrics`, `find_anomalies`,
   `compare_hosts`) so an LLM client such as Claude Code can investigate the system itself.
@@ -101,7 +103,7 @@ Stop with `docker compose down` (add `-v` to delete the database).
 | Level | What | Count |
 |---|---|---|
 | Unit (C++) | Parsers, CPU and memory math, queue under concurrency, TCP sender against a real socket | 61 |
-| Unit + DB (server) | Anomaly rules, ingest, every REST endpoint, against a real PostgreSQL | 69 |
+| Unit + DB (server) | Anomaly rules, ingest, every REST endpoint, against a real PostgreSQL | 82 |
 | MCP tools | All tools through the MCP SDK, REST API mocked at the HTTP layer | 22 |
 | Dashboard | Data functions, and the whole app with Streamlit's `AppTest` | 12 |
 | Integration | Whole Compose stack: data flow, CPU and memory anomalies, MCP ranking | 1 script |

@@ -243,6 +243,7 @@ window" query. Tables are created with `create_all` at startup (no migrations ye
 | Type | Rule | Where it runs |
 |---|---|---|
 | `cpu_high` | CPU > 90% for 3 consecutive samples; the event ends only after 3 samples < 80% (hysteresis) | after each sample, in `store_message` |
+| `cpu_unusual` | CPU at least 3 standard deviations above the host's own mean (last ~5 minutes, std floored at 5 points) for 3 samples; at least 30 samples of history; ends when back within 1 std dev for 3 samples | after each sample, in `store_message` |
 | `memory_high` | `mem_used_mb / mem_total_mb` > 90% | after each sample, in `store_message` |
 | `host_silent` | no data for more than 30 seconds | background task, every 5 seconds |
 

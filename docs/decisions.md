@@ -399,3 +399,24 @@
   can get the agent killed too; in production the agent would run outside the workload's cgroup
   (a DaemonSet in Kubernetes) and read all cgroups.
 
+## Statistical rule: cpu_unusual (z-score against the host's own history)
+- A fixed threshold misses a change in behavior below it: a host that usually sits at 5%
+  and jumps to 60% has changed, but 60% is not "high". The statistical rule compares each
+  host with itself: z = (CPU - mean) / std dev over its recent samples.
+- Fires when the last 3 samples are all at least 3 standard deviations above the mean. The
+  baseline is the host's recent samples (the same 5-minute window `store_message` already
+  loads) *without* the 3 being judged; otherwise the change would raise the mean and hide
+  itself.
+- Guards: at least 30 samples (1 minute) of history, so a new host is not judged; a floor of
+  5 percentage points on the standard deviation, so a host that sits at exactly 0% (std 0)
+  does not alarm on every 1% blip. Only rises are reported.
+- One anomaly per event, with the same derived-state pattern as the CPU hysteresis: the
+  event ends when CPU is back within 1 standard deviation for 3 samples. The baseline moves
+  with the data, so a change that lasts becomes the new normal and ends the event as well.
+- Checked live: a ~50% duty-cycle load in agent-1 (from ~0%) gave one `cpu_unusual`
+  ("CPU 51.9% is 10.3 standard deviations above this host's recent mean (0.1%)") and no
+  `cpu_high`. Removing the std floor made the constant-host test fail.
+- Limits: a 5-minute baseline knows nothing about daily patterns (a nightly batch job looks
+  unusual every night); a slow drift is absorbed into the baseline and never flagged; and
+  mean/std assume roughly normal data, which CPU usage is not. Production systems use longer
+  or seasonal baselines (e.g. the same hour last week), or robust statistics (median, MAD).
