@@ -116,7 +116,8 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] pytest for tools with mocked REST API
 
 ### Day 5 - CI
-- [ ] GitHub Actions: cpp job, python job (pytest + ruff), integration job (needs both)
+- [~] GitHub Actions: cpp job, python job (pytest + ruff), integration job (needs both)
+      (cpp, server, mcp-server, lint jobs written and simulated locally; integration job = step 2)
 - [ ] scripts/integration_test.sh; CI badge in README
 
 ### Day 6 - Dashboard, debugging, README
@@ -146,7 +147,10 @@ docs/ (architecture, decisions, debugging) updated for Day 3.
 Day 4 complete: MCP server (`mcp_server/server.py`, 4 tools) registered in `.mcp.json`; demo in
 docs/mcp_demo.md (compare_hosts -> find_anomalies -> get_host_metrics -> agent-1). 17 pytest tests
 for the tools (mocked REST API) pass.
-Next: Day 5, step 1 - GitHub Actions workflow (cpp job, python job with pytest + ruff).
+Day 5 in progress: `.github/workflows/ci.yml` with 4 parallel jobs (cpp, server + PostgreSQL
+service, mcp-server, lint). Each job simulated locally from scratch (fresh build dir and venvs):
+all green. Not yet run on GitHub: push, then check the Actions tab.
+Next: Day 5, step 2 - scripts/integration_test.sh + integration job (needs the other jobs).
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -216,3 +220,15 @@ Next: Day 5, step 1 - GitHub Actions workflow (cpp job, python job with pytest +
 - Tests: `cd mcp_server && .venv/bin/pytest` (dev deps: `requirements-dev.txt`, pytest 9.1.1).
   The `api` fixture swaps `server.client` for an `httpx2.Client` with `MockTransport`; tools are
   called via `asyncio.run(mcp.call_tool(...))` (no pytest-asyncio needed).
+
+### CI notes (decisions made during Day 5)
+- Workflow: `.github/workflows/ci.yml`, on push to main + pull requests; `concurrency` cancels
+  superseded runs; `permissions: contents: read`. Actions: checkout@v7, setup-python@v7 (pip cache).
+- Server tests in CI use a `postgres:17` service container; `TEST_DATABASE_URL` points to it.
+- ruff 0.16.10 (in both `requirements-dev.txt`, pinned again in the lint job). Config: `ruff.toml`
+  at the repo root, rules E, W, F, I, B, UP, line length 100, `src = ["server", "mcp_server"]`
+  (without `src`, imports of `app`/`server` are sorted as third-party). Run: `ruff check .`
+  from the repo root. `ruff format` not enforced (would reformat everything; maybe Day 7).
+- `gh` CLI is not installed; GitHub API via curl works.
+- To simulate CI locally: fresh `cmake -B <tmp>` + ctest; fresh venv per component installed
+  only from `requirements-dev.txt`, then pytest.

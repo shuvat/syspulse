@@ -30,6 +30,9 @@ Minutes = Annotated[int, Field(ge=1, le=1440)]
 
 Metric = Literal["cpu_percent", "mem_percent"]
 
+# One JSON object from the API (a sample, a host...) or one row of a ranking.
+Row = dict[str, Any]
+
 
 def api_get(path: str, params: dict[str, Any] | None = None) -> Any:
     """GET a REST endpoint and return its JSON; failures become a ToolError.
@@ -51,7 +54,7 @@ def api_get(path: str, params: dict[str, Any] | None = None) -> Any:
     return response.json()
 
 
-def metric_value(sample: dict[str, Any], metric: Metric) -> float:
+def metric_value(sample: Row, metric: Metric) -> float:
     """The value of `metric` in one sample (mem_percent is derived from used/total)."""
     if metric == "cpu_percent":
         return sample["cpu_percent"]
@@ -59,7 +62,7 @@ def metric_value(sample: dict[str, Any], metric: Metric) -> float:
     return sample["mem_used_mb"] / total * 100 if total else 0.0
 
 
-def rank_hosts(samples_by_host: dict[str, list[dict[str, Any]]], metric: Metric) -> list[dict[str, Any]]:
+def rank_hosts(samples_by_host: dict[str, list[Row]], metric: Metric) -> list[Row]:
     """Rank hosts by their average `metric`, highest first (pure, no I/O).
 
     `samples_by_host` maps a host name to its samples, oldest first (as the API returns

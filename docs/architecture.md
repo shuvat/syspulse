@@ -370,3 +370,29 @@ Tests replace the REST API at the HTTP layer (`httpx2.MockTransport`), so no ser
 They call the tools through `mcp.call_tool`, like a real client: results, query parameters
 sent to the API, error messages (unknown host, API down, HTTP 500), arguments rejected by the
 schema before any API call, and the pure ranking (`rank_hosts`, `metric_value`).
+
+## Continuous integration (GitHub Actions)
+
+`.github/workflows/ci.yml` runs on every push to `main` and on pull requests. The jobs run in
+parallel, so a failure shows which part broke.
+
+```mermaid
+flowchart LR
+    PUSH[push / pull request] --> CPP[cpp<br/>cmake build + ctest]
+    PUSH --> SRV[server<br/>pytest + PostgreSQL service]
+    PUSH --> MCP[mcp-server<br/>pytest, mocked API]
+    PUSH --> LINT[lint<br/>ruff check]
+```
+
+| Job | What it checks |
+|---|---|
+| `cpp` | The agent builds on a clean Ubuntu 24.04 runner and all GoogleTest tests pass |
+| `server` | Server tests against a real `postgres:17` service container (`TEST_DATABASE_URL`) |
+| `mcp-server` | MCP tool tests; the REST API is mocked, so no services are needed |
+| `lint` | `ruff check` on all Python code, config in `ruff.toml` at the repo root |
+
+Each Python job installs only its own `requirements-dev.txt` into a clean environment, so a
+missing dependency fails CI instead of working by accident on a developer machine.
+An integration job that runs the whole Compose stack is planned (Day 5, step 2).
+
+Lint locally (from the repo root): `server/.venv/bin/ruff check .`

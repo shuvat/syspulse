@@ -215,6 +215,16 @@ aborting: temp-path '.' must be readable and writeable
 - Then `server.py` was restored (no diff). This is manual mutation testing; tools such as
   `mutmut` automate it.
 
+## Lint: ruff reports our own imports as unsorted
+
+- Symptom: the first `ruff check .` from the repo root reported `I001 Import block is
+  un-sorted` in 4 test files, and its suggested fix moved `from app...` imports *above*
+  `from fastapi...` and `from sqlmodel...`.
+- Cause: run from the repo root, ruff did not know that `app` (in `server/`) and `server`
+  (in `mcp_server/`) are first-party modules, so it sorted them as third-party.
+- Fix: `src = ["server", "mcp_server"]` in `ruff.toml`. Lesson: read a tool's suggested fix
+  before applying `--fix`; here it would have "fixed" correct code.
+
 ## GDB
 
 *(Day 6: breakpoints, `info threads`, `thread apply all bt`, planted bug.)*

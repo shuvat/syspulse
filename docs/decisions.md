@@ -249,3 +249,28 @@
   `pytest-asyncio`.
 - Checked that the tests catch bugs by planting two (reversed sort, `minutes` not sent):
   each one failed exactly the test meant to catch it (manual mutation testing).
+
+## CI: GitHub Actions with parallel jobs
+- One job per component (`cpp`, `server`, `mcp-server`) plus `lint`, all in parallel: faster
+  than one long job, and the failing job names the broken part.
+- The server tests need PostgreSQL, so the `server` job runs `postgres:17` as a *service
+  container* with a healthcheck; the job starts only when the database is ready (the same idea
+  as `depends_on: service_healthy` in Compose). Same database engine as production, as locally.
+- Clean environments: each job installs only from its own requirements files, so CI also checks
+  that the dependency lists are complete.
+- Least privilege: `permissions: contents: read`; `concurrency` cancels a run when a newer
+  commit is pushed to the same branch.
+- Actions are pinned by major version (`@v7`). Pinning to a commit SHA would protect against a
+  compromised tag (supply chain) at the cost of manual updates; for a portfolio project the
+  major version is the usual trade-off.
+
+## Lint: ruff
+- One tool for import sorting, unused code, likely bugs (bugbear) and outdated syntax
+  (pyupgrade); it replaces flake8 + isort + pyupgrade and runs in milliseconds.
+- One `ruff.toml` at the repo root for both Python components, so the rules are the same
+  everywhere. `src = ["server", "mcp_server"]` tells ruff where our own modules are; without it,
+  `app` and `server` imports were sorted as third-party (4 false findings).
+- Only `ruff check` in CI for now. `ruff format --check` would reformat existing code in one
+  big diff; it can be added later in a separate, formatting-only commit.
+- The one real finding was a 105-character signature in `mcp_server/server.py`; fixed with a
+  type alias (`Row = dict[str, Any]`), which also made it more readable.

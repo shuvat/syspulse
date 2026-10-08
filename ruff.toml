@@ -1,0 +1,11 @@
+# Lint config for all Python code (server/, mcp_server/). Run from the repo root: ruff check .
+line-length = 100
+target-version = "py312"
+# Where our own modules live (app/ in server/, server.py in mcp_server/), so import
+# sorting treats them as first-party.
+src = ["server", "mcp_server"]
+
+[lint]
+# E/W: pycodestyle errors and warnings, F: pyflakes (unused imports, undefined names),
+# I: import sorting, B: bugbear (likely bugs), UP: pyupgrade (modern syntax for py312).
+select = ["E", "W", "F", "I", "B", "UP"]
