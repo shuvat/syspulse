@@ -84,6 +84,24 @@ jobs:
       - name: Test
         run: pytest -v
 
+  dashboard:
+    name: Dashboard (pytest + Streamlit AppTest)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: dashboard/requirements*.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Test
+        run: pytest -v
+
   lint:
     name: Python lint (ruff)
     runs-on: ubuntu-24.04
@@ -104,7 +122,7 @@ jobs:
     name: Integration (Docker Compose, end to end)
     # Runs only after every other job passed: it is the slowest job, and a failure in a
     # unit job already tells us what is broken.
-    needs: [cpp, server, mcp-server, lint]
+    needs: [cpp, server, mcp-server, dashboard, lint]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

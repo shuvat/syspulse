@@ -250,6 +250,18 @@ aborting: temp-path '.' must be readable and writeable
 - Fix: `src = ["server", "mcp_server"]` in `ruff.toml`. Lesson: read a tool's suggested fix
   before applying `--fix`; here it would have "fixed" correct code.
 
+## Dashboard: AppTest gotchas
+
+- `AppTest.from_file("app.py")` failed with `FileNotFoundError: ... dashboard/tests/app.py`:
+  the path is relative to the *test file* that calls it, not to the current directory.
+  Fix: `AppTest.from_file("../app.py")`.
+- The "API down" test found no error message on the page. Cause: `load()` is decorated with
+  `@st.cache_data(ttl=4)`, and the cache key is only its arguments (`minutes=10`). The test
+  ran within 4 seconds of the previous one, so it got the cached data of the fake API instead
+  of calling the failing one. Fix: `st.cache_data.clear()` before each app test.
+  In production this is the intended behavior; in tests, shared state between tests must be
+  reset.
+
 ## GDB
 
 *(Day 6: breakpoints, `info threads`, `thread apply all bt`, planted bug.)*

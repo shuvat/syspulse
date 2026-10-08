@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+# Run from dashboard/: makes `import data` work and limits collection to tests/.
+pythonpath = ["."]
+testpaths = ["tests"]

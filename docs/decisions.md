@@ -274,7 +274,7 @@
   each one failed exactly the test meant to catch it (manual mutation testing).
 
 ## CI: GitHub Actions with parallel jobs
-- One job per component (`cpp`, `server`, `mcp-server`) plus `lint`, all in parallel: faster
+- One job per component (`cpp`, `server`, `mcp-server`, `dashboard`) plus `lint`, all in parallel: faster
   than one long job, and the failing job names the broken part.
 - The server tests need PostgreSQL, so the `server` job runs `postgres:17` as a *service
   container* with a healthcheck; the job starts only when the database is ready (the same idea
@@ -313,3 +313,26 @@
   job, so it runs only when the fast checks passed.
 - The MCP stdio client starts the server with a minimal environment (only variables such as
   `PATH` and `HOME`), so `API_URL` is passed to it explicitly.
+
+## Dashboard: Streamlit, as a REST client
+- Streamlit builds a web dashboard from a plain Python script (no HTML/JS), and it is the
+  usual tool for internal data dashboards. Enough for tables and line charts; a custom
+  frontend (React) would be much more code for the same result.
+- Read-only client of the REST API, like the MCP server: the API is the single owner of the
+  data, and a human and an LLM use the same endpoints. No database credentials in the dashboard.
+- Streamlit reruns the whole script on every interaction. Live data: `st.fragment` with
+  `run_every="5s"` reruns only the live part. `st.cache_data(ttl=4)` shares the loaded data
+  between browser sessions, so the request rate does not grow with the number of viewers.
+- Logic in `data.py` without Streamlit (same pattern as `rank_hosts` in the MCP server), so it
+  is unit-tested directly. The UI is tested with Streamlit's `AppTest`, which runs the script
+  without a browser; the API is replaced by monkeypatching `data.api_get`.
+- Dependency: only `streamlit` (pinned). It brings `pandas` (tables and reshaping), `altair`
+  (charts) and `requests` (HTTP client), so nothing else is added. Cost: a 767MB image, mostly
+  pandas, numpy and pyarrow.
+- Charts use the long -> wide reshape `pivot_table(index=ts, columns=host)`: one line per host.
+  `pivot_table` instead of `pivot`, because two samples can share a one-second timestamp,
+  which makes `pivot` fail.
+- In the container: `--server.headless=true` (no browser to open) and
+  `--browser.gatherUsageStats=false` (no usage telemetry sent out).
+- Published only on `127.0.0.1:8501`. The dashboard has no authentication; exposing it beyond
+  localhost would need a reverse proxy with auth.

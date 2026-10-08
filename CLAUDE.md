@@ -120,7 +120,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] scripts/integration_test.sh; CI badge in README
 
 ### Day 6 - Dashboard, debugging, README
-- [ ] Streamlit dashboard added to compose
+- [x] Streamlit dashboard added to compose
 - [ ] valgrind --leak-check=full on agent -> no leaks
 - [ ] GDB session (breakpoints, info threads, backtrace, planted bug) -> docs/debugging.md
 - [ ] README: one-line pitch, demo video, diagram, tech stack, 3-command quick start
@@ -149,12 +149,15 @@ for the tools (mocked REST API) pass.
 Day 5 in progress: `.github/workflows/ci.yml` with 4 parallel jobs (cpp, server + PostgreSQL
 service, mcp-server, lint). Each job simulated locally from scratch (fresh build dir and venvs):
 all green, and green on GitHub Actions (first run, 2026-10-08), including the cgroup collector test.
-Integration test (`scripts/integration_test.sh`) passes locally 4/4 after a fix: agents now have
-`cpus: "1.0"` and report CPU relative to that limit (cpu.max) - before, CPU was relative to the
-whole machine and the anomaly was flaky (49-98% under load). 52 GoogleTest tests pass.
-Integration job + README badge added to CI, not pushed yet.
-Next: push and check that all 5 jobs are green on GitHub (integration runs after the other 4).
-Then Day 5 is complete -> Day 6, step 1 - Streamlit dashboard.
+Day 5 complete: integration test (`scripts/integration_test.sh`) passes locally 4/4 and in CI; all
+5 CI jobs green on GitHub (2026-10-08). Agents have `cpus: "1.0"` and report CPU relative to that
+limit (cpu.max) - before, CPU was relative to the whole machine and the anomaly was flaky.
+52 GoogleTest tests pass. README has the CI badge.
+Day 6 in progress: Streamlit dashboard (`dashboard/app.py` + `data.py`) in compose at
+http://localhost:8501; 11 pytest tests (pure functions + AppTest) pass; CI has a `dashboard` job
+(integration now needs it too). Verified against the real API under load; integration test passes.
+Not pushed yet.
+Next: Day 6, step 2 - valgrind --leak-check=full on the agent.
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -241,3 +244,15 @@ Then Day 5 is complete -> Day 6, step 1 - Streamlit dashboard.
   Uses Compose project `syspulse-it` (dev volume untouched), cleans up with `down -v`, prints logs
   on failure. `MCP_PYTHON` (default `mcp_server/.venv/bin/python`) runs the MCP client step.
   CI job `integration` needs the other 4 jobs. Takes ~1-1.5 min locally.
+
+### Dashboard notes (decisions made during Day 6)
+- `streamlit==1.65.0` in its own venv `dashboard/.venv` (brings pandas 3, altair, requests).
+  Dev: `requirements-dev.txt` (pytest 9.1.1, ruff 0.16.10). Tests: `cd dashboard && .venv/bin/pytest`.
+- `app.py` = UI only; `data.py` = API client (`requests`, 5s timeout, `ApiError`) + pure functions.
+- Live refresh: `@st.fragment(run_every="5s")`; `@st.cache_data(ttl=4)` on `load(minutes)`.
+- Tests: `AppTest.from_file("../app.py")` (path relative to the test file); monkeypatch
+  `data.api_get`; call `st.cache_data.clear()` before each app test.
+- Compose service `dashboard`: `API_URL=http://server:8000`, `127.0.0.1:8501`, healthcheck on
+  `/_stcore/health`, depends on server healthy. Image 767MB (pandas/numpy/pyarrow).
+- ruff `src` now includes `dashboard`.
+- Quick headless check against the real API: `AppTest.from_file("app.py").run()` from `dashboard/`.

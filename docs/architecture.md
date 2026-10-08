@@ -4,7 +4,7 @@ SysPulse collects system metrics from Linux hosts, stores them in PostgreSQL,
 detects anomalies, and exposes the data to a dashboard and to an LLM through MCP.
 
 > Status: the C++ agent, the Python server and the Docker Compose deployment (with a load
-> test) and the MCP server are implemented. The dashboard is planned (marked *planned* below).
+> test), the MCP server and the Streamlit dashboard are implemented.
 
 ## Overview
 
@@ -25,7 +25,7 @@ flowchart LR
 
     DB[(PostgreSQL)]
     MCP[MCP server<br/>MCPServer, stdio]
-    DASH[Streamlit dashboard - planned]
+    DASH[Streamlit dashboard<br/>:8501]
     LLM[Claude]
 
     A1 & A2 & A3 -- "TCP, newline-delimited JSON" --> I
@@ -46,7 +46,8 @@ flowchart LR
    CPU and memory anomaly rules, all in one transaction.
 3. A background task checks every 5 seconds for hosts that went silent.
 4. The REST API serves hosts, metrics and anomalies.
-5. The MCP server is a read-only client of the REST API; the dashboard will be one too. *(dashboard planned)*
+5. The MCP server and the dashboard are read-only clients of the REST API (an LLM and a human
+   use the same API).
 
 ## Message format
 
@@ -278,6 +279,7 @@ flowchart LR
         A3[agent-3]
         SRV[server<br/>:8000 REST, :9000 ingest]
         DB[(db<br/>PostgreSQL 17)]
+        DASH[dashboard<br/>Streamlit :8501]
     end
 
     VOL[(volume pgdata)]
@@ -285,11 +287,13 @@ flowchart LR
     A1 & A2 & A3 -- "server:9000" --> SRV
     SRV -- "db:5432" --> DB
     DB --- VOL
+    DASH -- "server:8000" --> SRV
     USER -- "127.0.0.1:8000" --> SRV
+    USER -- "127.0.0.1:8501" --> DASH
 ```
 
-- **Ports**: only `127.0.0.1:8000` (REST API) and `127.0.0.1:5432` (database, for local
-  development) are published, and only on localhost. Port 9000 is not published: only the
+- **Ports**: only `127.0.0.1:8000` (REST API), `127.0.0.1:8501` (dashboard) and
+  `127.0.0.1:5432` (database, for local development) are published, and only on localhost. Port 9000 is not published: only the
   agents use it, over the internal network.
 - **Startup order**: `depends_on` with `condition: service_healthy` waits until a service is
   *ready*, not only started: `db` (`pg_isready`) -> `server` (`GET /health`, which also
@@ -305,6 +309,7 @@ flowchart LR
 |---|---|---|
 | agent | Multi-stage: `ubuntu:24.04` + build tools -> `ubuntu:24.04` with only the binary | 118MB; compilers stay in the build stage |
 | server | Single stage: `python:3.12-slim` | Nothing is compiled (`psycopg[binary]` ships libpq); dependencies are installed before the code is copied, so that layer stays cached |
+| dashboard | Single stage: `python:3.12-slim` | Same pattern as the server; 767MB, mostly Streamlit's data stack (pandas, numpy, pyarrow) |
 
 Both run as a non-root user and start the process in exec form, so it is PID 1 and receives
 the `SIGTERM` from `docker stop` directly.
@@ -385,8 +390,9 @@ flowchart LR
     PUSH[push / pull request] --> CPP[cpp<br/>cmake build + ctest]
     PUSH --> SRV[server<br/>pytest + PostgreSQL service]
     PUSH --> MCP[mcp-server<br/>pytest, mocked API]
+    PUSH --> DSH[dashboard<br/>pytest + AppTest]
     PUSH --> LINT[lint<br/>ruff check]
-    CPP & SRV & MCP & LINT --> IT[integration<br/>Compose stack, end to end]
+    CPP & SRV & MCP & DSH & LINT --> IT[integration<br/>Compose stack, end to end]
 ```
 
 | Job | What it checks |
@@ -394,6 +400,7 @@ flowchart LR
 | `cpp` | The agent builds on a clean Ubuntu 24.04 runner and all GoogleTest tests pass |
 | `server` | Server tests against a real `postgres:17` service container (`TEST_DATABASE_URL`) |
 | `mcp-server` | MCP tool tests; the REST API is mocked, so no services are needed |
+| `dashboard` | Dashboard tests: pure data functions and the whole app with Streamlit's `AppTest` |
 | `lint` | `ruff check` on all Python code, config in `ruff.toml` at the repo root |
 | `integration` | Runs only if all jobs above passed: `scripts/integration_test.sh` on the real Compose stack |
 
@@ -406,7 +413,7 @@ The README shows a CI status badge for `main`.
 `scripts/integration_test.sh` builds and starts the whole stack as a separate Compose project
 (`syspulse-it`, its own containers and volume) and checks, step by step:
 
-1. `docker compose up -d --build --wait`: every healthcheck passes.
+1. `docker compose up -d --build --wait`: every healthcheck passes (db, server, dashboard).
 2. Every agent's samples reach the database and the REST API (agent -> TCP -> ingest -> DB).
 3. `scripts/load_test.sh`: CPU load in agent-1 gives `cpu_high` for agent-1 only.
 4. A real stdio MCP client starts `mcp_server/server.py` and calls `compare_hosts`:
@@ -416,3 +423,41 @@ On exit it removes the test stack (`down -v`); on failure it first prints the co
 Locally, stop the development stack first (`docker compose stop`); its data is not touched.
 
 Lint locally (from the repo root): `server/.venv/bin/ruff check .`
+
+## Dashboard (Streamlit)
+
+`dashboard/app.py` shows the system to a human, at http://localhost:8501. Like the MCP
+server, it is a read-only client of the REST API and never touches the database.
+
+| Section | Content |
+|---|---|
+| Hosts | Name, status (online, or silent after 30 seconds, the same limit as `host_silent`), `last_seen`, latest CPU % |
+| CPU % / Memory % | One line per host; window chosen in the sidebar (5, 10, 30 or 60 minutes) |
+| Anomalies | Last 60 minutes, newest first |
+
+- Streamlit reruns the whole script on every interaction. The live part is an
+  `@st.fragment(run_every="5s")`, so it refreshes itself every 5 seconds without a page reload.
+- `@st.cache_data(ttl=4)` on the loading function: shared by all browser sessions, so several
+  viewers do not multiply the requests to the API. Errors are not cached.
+- API down: the page shows an error message instead of a traceback.
+- `dashboard/data.py` holds the API client and pure functions (host status, reshaping samples
+  for the charts) with no Streamlit, so they are unit-tested directly.
+
+| File | Responsibility |
+|---|---|
+| `app.py` | Page layout, refresh and caching (Streamlit) |
+| `data.py` | `api_get` (requests, 5s timeout, errors -> `ApiError`), `host_status`, `metrics_frame`, `chart_frame`, `hosts_frame` |
+
+### Run and tests
+
+```bash
+docker compose up -d --build --wait          # dashboard at http://localhost:8501
+# or locally:
+cd dashboard
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+API_URL=http://localhost:8000 .venv/bin/streamlit run app.py
+.venv/bin/pytest -v
+```
+
+Tests cover the pure functions and run the whole app with Streamlit's `AppTest` (no browser)
+against a fake API: all sections render, and an unreachable API shows an error, not a crash.

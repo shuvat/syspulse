@@ -1,0 +1,2 @@
+# Dashboard runtime dependency (pinned). Brings pandas, altair (charts) and requests.
+streamlit==1.65.0

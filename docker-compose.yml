@@ -53,6 +53,23 @@ services:
       retries: 10
     restart: unless-stopped
 
+  dashboard:
+    build: ./dashboard
+    environment:
+      API_URL: http://server:8000
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      # Streamlit's own health endpoint; no curl in the slim image.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   agent-1:
     <<: *agent
     environment:

@@ -1,9 +1,9 @@
-# Lint config for all Python code (server/, mcp_server/). Run from the repo root: ruff check .
+# Lint config for all Python code (server/, mcp_server/, dashboard/). Run from the repo root: ruff check .
 line-length = 100
 target-version = "py312"
-# Where our own modules live (app/ in server/, server.py in mcp_server/), so import
-# sorting treats them as first-party.
-src = ["server", "mcp_server"]
+# Where our own modules live (app/ in server/, server.py in mcp_server/, data.py in
+# dashboard/), so import sorting treats them as first-party.
+src = ["server", "mcp_server", "dashboard"]
 
 [lint]
 # E/W: pycodestyle errors and warnings, F: pyflakes (unused imports, undefined names),

@@ -1,0 +1,8 @@
+# Only requirements.txt, app.py and data.py belong in the image.
+.venv/
+tests/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+requirements-dev.txt
+pyproject.toml
