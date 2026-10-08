@@ -113,7 +113,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] MCP server (`MCPServer`, formerly FastMCP) with the 4 tools (clear docstrings)
 - [x] Connect to Claude Code (`claude mcp add`), demo: "Which host is overloaded and why?"
       (docs/mcp_demo.md)
-- [ ] pytest for tools with mocked REST API
+- [x] pytest for tools with mocked REST API
 
 ### Day 5 - CI
 - [ ] GitHub Actions: cpp job, python job (pytest + ruff), integration job (needs both)
@@ -143,11 +143,10 @@ Day 3 complete: full Compose stack (db, server, agent-1..3) works end to end
 (`docker compose up -d --build --wait`). Agents measure per-container CPU (`CPU_SOURCE=cgroup`);
 `scripts/load_test.sh` passes (cpu_high for agent-1 only). 44 GoogleTest tests pass.
 docs/ (architecture, decisions, debugging) updated for Day 3.
-Day 4 in progress: MCP server (`mcp_server/server.py`, 4 tools) works against the running stack,
-verified in-process and through a real stdio MCP client. Registered in `.mcp.json` (project scope).
-
-Demo done (docs/mcp_demo.md): compare_hosts -> find_anomalies -> get_host_metrics -> agent-1.
-Next: Day 4, step 3 - pytest for the tools with a mocked REST API (httpx2.MockTransport).
+Day 4 complete: MCP server (`mcp_server/server.py`, 4 tools) registered in `.mcp.json`; demo in
+docs/mcp_demo.md (compare_hosts -> find_anomalies -> get_host_metrics -> agent-1). 17 pytest tests
+for the tools (mocked REST API) pass.
+Next: Day 5, step 1 - GitHub Actions workflow (cpp job, python job with pytest + ruff).
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -214,3 +213,6 @@ Next: Day 4, step 3 - pytest for the tools with a mocked REST API (httpx2.MockTr
 - `claude` CLI is not on PATH; use the extension's binary:
   `~/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude mcp list`.
 - Known limit: `mem_percent` identical across agents (memory from /proc/meminfo, whole machine).
+- Tests: `cd mcp_server && .venv/bin/pytest` (dev deps: `requirements-dev.txt`, pytest 9.1.1).
+  The `api` fixture swaps `server.client` for an `httpx2.Client` with `MockTransport`; tools are
+  called via `asyncio.run(mcp.call_tool(...))` (no pytest-asyncio needed).

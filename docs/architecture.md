@@ -360,4 +360,10 @@ flowchart LR
 cd mcp_server
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # Claude Code starts it automatically from .mcp.json; API_URL defaults to http://localhost:8000
+.venv/bin/pip install -r requirements-dev.txt && .venv/bin/pytest
 ```
+
+Tests replace the REST API at the HTTP layer (`httpx2.MockTransport`), so no server is needed.
+They call the tools through `mcp.call_tool`, like a real client: results, query parameters
+sent to the API, error messages (unknown host, API down, HTTP 500), arguments rejected by the
+schema before any API call, and the pure ranking (`rank_hosts`, `metric_value`).

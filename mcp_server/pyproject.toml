@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+# Run from mcp_server/: makes `import server` work and limits collection to tests/.
+pythonpath = ["."]
+testpaths = ["tests"]
