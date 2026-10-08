@@ -99,3 +99,24 @@ jobs:
       # as annotations on the changed lines of a pull request.
       - name: Ruff
         run: ruff check --output-format=github .
+
+  integration:
+    name: Integration (Docker Compose, end to end)
+    # Runs only after every other job passed: it is the slowest job, and a failure in a
+    # unit job already tells us what is broken.
+    needs: [cpp, server, mcp-server, lint]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: mcp_server/requirements.txt
+      # For step 4 of the test (a real MCP client). Docker and Compose v2 are preinstalled.
+      - name: Install MCP SDK
+        run: pip install -r mcp_server/requirements.txt
+      - name: Integration test
+        env:
+          MCP_PYTHON: python
+        run: ./scripts/integration_test.sh

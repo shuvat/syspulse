@@ -188,15 +188,38 @@
   field `usage_usec` (the same source `docker stats` uses). With cgroup v2 the cgroup
   namespace is private by default, so that path is the container's own cgroup.
 - `CPU_SOURCE=cgroup` (set in docker-compose.yml): `cpu% = delta usage_usec /
-  (elapsed wall time x number of CPUs) x 100`, elapsed time from `steady_clock`. Same scale
-  as `/proc/stat` (100 = every CPU busy), so the anomaly rule keeps its meaning.
+  (elapsed wall time x CPU capacity) x 100`, elapsed time from `steady_clock`. The capacity is
+  the container's CPU limit from `/sys/fs/cgroup/cpu.max`, or every CPU of the machine if it
+  has no limit (see the next section). 100 = the container uses everything it may use.
   `docker stats` uses another scale (200% = two busy cores).
 - `CPU_SOURCE=proc` stays the default, so the agent on a bare machine behaves as before.
   Explicit config, not auto-detection, so behavior is predictable.
 - Why: with `/proc/stat` a load in one container raised the CPU of all three agents, so
   "which host is overloaded?" had no meaningful answer.
-- Known limits: memory still comes from `/proc/meminfo` (whole machine); a container with a
-  CPU limit (`cpu.max` other than `max`) would need percent relative to its quota.
+- Known limit: memory still comes from `/proc/meminfo` (whole machine).
+
+## CPU percent relative to the container's CPU limit
+- Problem found while writing the integration test: under the same load, agent-1 reported
+  92-98% one day and 49-98% the next, so the `cpu_high` rule (3 samples > 90%) fired only
+  sometimes. Measured against the *whole machine*, a container reaches 90% only if nothing
+  else needs CPU: on a laptop the WSL VM's virtual CPUs are shared with Windows by the
+  hypervisor, and a CI runner is busy with Docker and the other containers. The test
+  depended on something the system does not control (a flaky test).
+- Fix: every agent gets a CPU limit in Compose (`cpus: "1.0"`), and the agent reports CPU
+  relative to that limit, read from `cpu.max` (`"<quota> <period>"`, e.g. `100000 100000` =
+  1 CPU; `max` = no limit). A busy container now reaches ~100% as long as one CPU of the
+  machine is free. Measured: 97.6-100% under load; 4 of 4 integration runs passed.
+- Also the more useful meaning for monitoring: "this host uses everything it was given" is
+  what Kubernetes and `docker stats` compare against limits.
+- Rejected alternative: a lower threshold in the integration test only. Smaller change, but
+  the test would not use the production configuration, and the metric would still depend
+  on the neighbors.
+- Details: `cpu.max` is read on every sample, because a limit can change at runtime
+  (`docker update --cpus`). A missing file (root cgroup, e.g. a CI runner without Docker)
+  means no limit. A limit above the number of CPUs is capped at the number of CPUs, because
+  it can never be reached. Not using the limit as a *denominator* when the machine itself is
+  overloaded: then the container can be below 100% of its limit while starved; CPU pressure
+  (`cpu.stat` `throttled_usec`, PSI) would show that, not implemented.
 
 ## Load test without stress-ng in the image
 - The load must run inside agent-1, because agent-1 measures only its own cgroup.
@@ -204,9 +227,9 @@
   on `libegl1`/`libgbm1` (GPU stressors), which pull in Mesa and LLVM.
 - `scripts/load_test.sh` instead starts one shell busy loop per CPU in agent-1 (what
   `stress-ng --cpu 0` does for our purpose). No new dependency, image stays at 118MB.
-- Measured during the load: 92-98% (the rest of the stack also uses some CPU), so the test
-  sits close to the 90% threshold. The script polls for 30s, so a single dip below 90% only
-  delays the anomaly. Watch this in CI, where runners have fewer CPUs.
+- Measured during the load at first: 92-98%, close to the 90% threshold; the next day
+  49-98% and the test failed. Fixed by measuring CPU relative to the container's limit (see
+  "CPU percent relative to the container's CPU limit"): now 97.6-100%.
 
 ## AI integration: MCP server
 - Why: an LLM can answer open questions ("which host is overloaded and why?") by choosing
@@ -260,6 +283,7 @@
   that the dependency lists are complete.
 - Least privilege: `permissions: contents: read`; `concurrency` cancels a run when a newer
   commit is pushed to the same branch.
+- Plus an `integration` job that runs after all the others (see "Integration test" below).
 - Actions are pinned by major version (`@v7`). Pinning to a commit SHA would protect against a
   compromised tag (supply chain) at the cost of manual updates; for a portfolio project the
   major version is the usual trade-off.
@@ -274,3 +298,18 @@
   big diff; it can be added later in a separate, formatting-only commit.
 - The one real finding was a 105-character signature in `mcp_server/server.py`; fixed with a
   type alias (`Row = dict[str, Any]`), which also made it more readable.
+
+## Integration test: the whole system, isolated from the development stack
+- `scripts/integration_test.sh` starts the real Compose stack and checks the full path:
+  agents -> ingest -> PostgreSQL -> REST API -> anomaly rule -> MCP tool (through a real stdio
+  MCP client). Unit tests check the parts; this checks that they work together.
+- Separate Compose project (`COMPOSE_PROJECT_NAME=syspulse-it`): own containers, network and
+  volume. The cleanup runs `docker compose down -v`, which would delete the development
+  database if it used the same project. It uses the same ports, so the script refuses to
+  start if something already answers on the API port.
+- `trap ... EXIT` always cleans up, and on failure first prints the container logs: in CI they
+  are the only way to see what happened inside the containers.
+- In CI the `integration` job has `needs: [cpp, server, mcp-server, lint]`: it is the slowest
+  job, so it runs only when the fast checks passed.
+- The MCP stdio client starts the server with a minimal environment (only variables such as
+  `PATH` and `HOME`), so `API_URL` is passed to it explicitly.

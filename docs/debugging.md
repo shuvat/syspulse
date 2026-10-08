@@ -128,6 +128,8 @@ OSError: [Errno 98] error while attempting to bind on address ('127.0.0.1', 8000
   `usage_usec` is the container's own CPU time; `cpu.max` = `max 100000` means no CPU limit.
 - Fix: `CPU_SOURCE=cgroup` (see [decisions.md](decisions.md)). Verified with one busy loop
   in agent-1: agent-1 reported 12.5% (one CPU out of 8), agent-2 and agent-3 stayed at 0%.
+  (Later the agents got a CPU limit, and CPU % became relative to it; see the flaky load test
+  below.)
 
 ## Docker: stress-ng fails silently in the agent container
 
@@ -158,6 +160,29 @@ aborting: temp-path '.' must be readable and writeable
 - Cause: Ubuntu's stress-ng package has GPU stressors, so it depends on the graphics stack.
   `--no-install-recommends` does not help, because these are hard dependencies.
 - Fix: stress-ng removed from the image; the load test uses one shell busy loop per CPU.
+
+## Load test: CPU anomaly appears only sometimes (flaky test)
+
+- Symptom: the first integration test run failed at the load step ("no cpu_high anomaly
+  for agent-1 within 30s"), with no error. The day before, the same load test had passed.
+- Diagnosis: start the same Compose project by hand, without the automatic cleanup, run the
+  load and look at the samples:
+
+  ```bash
+  export COMPOSE_PROJECT_NAME=syspulse-it
+  docker compose up -d --wait && ./scripts/load_test.sh
+  curl -s "localhost:8000/hosts/agent-1/metrics?minutes=2"
+  ```
+
+  Under load: `33.9, 95.1, 88.4, 63.2, 63.9, 95.5, 88.0, 70.8, ...`: never 3 samples above
+  90% in a row. The day before: 92-98%.
+- Cause: CPU was measured against the whole machine. The 8 CPUs of the WSL VM are virtual and
+  shared with Windows by the hypervisor, so how much of "the machine" one container gets
+  depends on everything else running. The test depended on something outside the system.
+- Fix: a CPU limit per agent (`cpus: "1.0"`) and CPU % relative to that limit (`cpu.max`).
+  Under load now 97.6-100%; the integration test passed 4 times in a row.
+- Lesson: when a test fails "sometimes", find what it depends on that the code does not
+  control. Lowering the threshold would have hidden the problem, not fixed it.
 
 ## MCP: setup gotchas
 

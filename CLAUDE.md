@@ -116,9 +116,8 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 - [x] pytest for tools with mocked REST API
 
 ### Day 5 - CI
-- [~] GitHub Actions: cpp job, python job (pytest + ruff), integration job (needs both)
-      (cpp, server, mcp-server, lint jobs written and simulated locally; integration job = step 2)
-- [ ] scripts/integration_test.sh; CI badge in README
+- [x] GitHub Actions: cpp job, python job (pytest + ruff), integration job (needs both)
+- [x] scripts/integration_test.sh; CI badge in README
 
 ### Day 6 - Dashboard, debugging, README
 - [ ] Streamlit dashboard added to compose
@@ -149,8 +148,13 @@ docs/mcp_demo.md (compare_hosts -> find_anomalies -> get_host_metrics -> agent-1
 for the tools (mocked REST API) pass.
 Day 5 in progress: `.github/workflows/ci.yml` with 4 parallel jobs (cpp, server + PostgreSQL
 service, mcp-server, lint). Each job simulated locally from scratch (fresh build dir and venvs):
-all green. Not yet run on GitHub: push, then check the Actions tab.
-Next: Day 5, step 2 - scripts/integration_test.sh + integration job (needs the other jobs).
+all green, and green on GitHub Actions (first run, 2026-10-08), including the cgroup collector test.
+Integration test (`scripts/integration_test.sh`) passes locally 4/4 after a fix: agents now have
+`cpus: "1.0"` and report CPU relative to that limit (cpu.max) - before, CPU was relative to the
+whole machine and the anomaly was flaky (49-98% under load). 52 GoogleTest tests pass.
+Integration job + README badge added to CI, not pushed yet.
+Next: push and check that all 5 jobs are green on GitHub (integration runs after the other 4).
+Then Day 5 is complete -> Day 6, step 1 - Streamlit dashboard.
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -164,7 +168,9 @@ Next: Day 5, step 2 - scripts/integration_test.sh + integration job (needs the o
 - `gtest_discover_tests` uses `DISCOVERY_MODE PRE_TEST`.
 - TSan on this WSL kernel needs ASLR off: `setarch -R ./build-tsan/agent_tests`.
 - `CPU_SOURCE=proc|cgroup` (default proc). cgroup mode reads `/sys/fs/cgroup/cpu.stat`
-  (`usage_usec`) and divides by elapsed `steady_clock` time x `hardware_concurrency()`.
+  (`usage_usec`) and divides by elapsed `steady_clock` time x CPU capacity. Capacity = limit from
+  `/sys/fs/cgroup/cpu.max` (read every sample; "max" or missing file = no limit), capped at
+  `hardware_concurrency()`. Compose gives each agent `cpus: "1.0"`.
   Memory still comes from `/proc/meminfo` (whole machine).
 - Load test uses shell busy loops, not stress-ng: stress-ng in the image added ~340MB (Mesa/LLVM).
 
@@ -200,8 +206,7 @@ Next: Day 5, step 2 - scripts/integration_test.sh + integration job (needs the o
 - Published only on localhost: 8000 (API), 5432 (DB). 9000 (ingest) is internal only.
 - Agents share a YAML anchor `x-agent`; `environment` has its own anchor (`<<` merge is shallow).
 - Load test: `./scripts/load_test.sh` (stack must be up). Wait ~30s between runs (edge-triggered
-  rule needs CPU to drop first). Values under load are 92-98%, close to the 90% threshold;
-  watch for flakiness in CI.
+  rule needs CPU to drop first). Under load agent-1 is at 97.6-100% of its 1-CPU limit.
 - Windows `npx` (in PATH from /mnt/c) cannot read WSL paths, so mermaid-cli does not work here;
   check Mermaid diagrams in the VS Code preview or on GitHub.
 
@@ -232,3 +237,7 @@ Next: Day 5, step 2 - scripts/integration_test.sh + integration job (needs the o
 - `gh` CLI is not installed; GitHub API via curl works.
 - To simulate CI locally: fresh `cmake -B <tmp>` + ctest; fresh venv per component installed
   only from `requirements-dev.txt`, then pytest.
+- Integration test: `docker compose stop` first (same ports), then `./scripts/integration_test.sh`.
+  Uses Compose project `syspulse-it` (dev volume untouched), cleans up with `down -v`, prints logs
+  on failure. `MCP_PYTHON` (default `mcp_server/.venv/bin/python`) runs the MCP client step.
+  CI job `integration` needs the other 4 jobs. Takes ~1-1.5 min locally.

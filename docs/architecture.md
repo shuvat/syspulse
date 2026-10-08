@@ -60,7 +60,7 @@ One JSON object per line (`\n`-terminated):
 |---|---|
 | `host` | Agent name (`AGENT_NAME`) |
 | `ts` | Unix time in seconds when the sample was taken |
-| `cpu_percent` | CPU busy share since the previous sample, 0-100 (100 = every CPU busy). Whole machine (`/proc/stat`) or only the agent's container (cgroup), see `CPU_SOURCE` |
+| `cpu_percent` | CPU busy share since the previous sample, 0-100. `CPU_SOURCE=proc`: whole machine (100 = every CPU busy). `CPU_SOURCE=cgroup`: the agent's container, relative to its CPU limit (100 = the container uses all it may use) |
 | `mem_used_mb` / `mem_total_mb` | `MemTotal - MemAvailable` / `MemTotal` from `/proc/meminfo` |
 | `net_rx_bytes` / `net_tx_bytes` | Cumulative byte counters, summed over all interfaces except `lo` |
 
@@ -120,7 +120,7 @@ The producer is stopped before the queue is closed, so no collected sample is re
 | `AGENT_NAME` | `agent` | Value of the `host` field |
 | `SERVER_HOST` | `127.0.0.1` | Server name or IP (resolved with `getaddrinfo`) |
 | `SERVER_PORT` | `9000` | Server TCP port (1-65535; invalid values exit with an error) |
-| `CPU_SOURCE` | `proc` | `proc`: CPU of the whole machine. `cgroup`: CPU of this container only (invalid values exit with an error) |
+| `CPU_SOURCE` | `proc` | `proc`: CPU of the whole machine. `cgroup`: CPU of this container only, relative to its CPU limit (invalid values exit with an error) |
 
 ### CPU inside a container
 
@@ -131,11 +131,14 @@ CPU time used by one container is accounted in its cgroup, in `/sys/fs/cgroup/cp
 (`usage_usec`). With `CPU_SOURCE=cgroup` (set in `docker-compose.yml`) the agent computes:
 
 ```
-cpu_percent = delta usage_usec / (elapsed steady_clock time x number of CPUs) x 100
+cpu_percent = delta usage_usec / (elapsed steady_clock time x CPU capacity) x 100
+CPU capacity = the container's CPU limit (cpu.max, e.g. "100000 100000" = 1 CPU),
+               or every CPU of the machine if there is no limit
 ```
 
-This is the same scale as `/proc/stat`, so the anomaly rule keeps its meaning. Memory still
-comes from `/proc/meminfo`. See `decisions.md` for the trade-offs.
+The agents run with `cpus: "1.0"`, so 100% means "the container uses everything it may use",
+whatever else runs on the machine. Memory still comes from `/proc/meminfo`. See
+`decisions.md` for why (a flaky test) and the trade-offs.
 
 ### Build and tests
 
@@ -149,7 +152,7 @@ Dependencies are fetched with CMake `FetchContent` and pinned to releases:
 nlohmann/json v3.12.0 and GoogleTest v1.17.0 (tests only; `-DBUILD_TESTING=OFF` skips them).
 
 The test suite covers the parsers (including malformed input), `cpu_percent` and
-`cgroup_cpu_percent` edge cases, the collector thread with both CPU sources,
+`cgroup_cpu_percent`, `cpu.max` parsing and CPU capacity edge cases, the collector thread with both CPU sources,
 the queue and stop flag under concurrency, JSON serialization, and the sender against a
 real local TCP server (send, reconnect, prompt shutdown while the server is down).
 
@@ -293,8 +296,8 @@ flowchart LR
   checks the database) -> agents. `restart: unless-stopped` on the server and the agents.
 - **Data**: the `pgdata` volume keeps the database across `docker compose down`;
   `docker compose down -v` deletes it (needed after a model change, as there are no migrations).
-- **Agents**: one shared definition (YAML anchor `x-agent`), each with its own `AGENT_NAME`
-  and `CPU_SOURCE=cgroup`.
+- **Agents**: one shared definition (YAML anchor `x-agent`), each with its own `AGENT_NAME`,
+  `CPU_SOURCE=cgroup` and a limit of one CPU (`cpus: "1.0"`).
 
 ### Images
 
@@ -308,7 +311,8 @@ the `SIGTERM` from `docker stop` directly.
 
 ### Load test
 
-`scripts/load_test.sh` starts one busy loop per CPU inside agent-1 for 30 seconds and polls
+`scripts/load_test.sh` starts one busy loop per CPU of the machine inside agent-1 for 30 seconds
+(the CPU limit keeps the container at ~100% of one CPU) and polls
 `GET /anomalies` until a `cpu_high` anomaly appears. It passes only if the anomaly is
 reported for agent-1 **and not** for agent-2 or agent-3, which shows that each agent measures
 its own container. Only anomalies newer than the start of the run count, so results of
@@ -382,6 +386,7 @@ flowchart LR
     PUSH --> SRV[server<br/>pytest + PostgreSQL service]
     PUSH --> MCP[mcp-server<br/>pytest, mocked API]
     PUSH --> LINT[lint<br/>ruff check]
+    CPP & SRV & MCP & LINT --> IT[integration<br/>Compose stack, end to end]
 ```
 
 | Job | What it checks |
@@ -390,9 +395,24 @@ flowchart LR
 | `server` | Server tests against a real `postgres:17` service container (`TEST_DATABASE_URL`) |
 | `mcp-server` | MCP tool tests; the REST API is mocked, so no services are needed |
 | `lint` | `ruff check` on all Python code, config in `ruff.toml` at the repo root |
+| `integration` | Runs only if all jobs above passed: `scripts/integration_test.sh` on the real Compose stack |
 
 Each Python job installs only its own `requirements-dev.txt` into a clean environment, so a
 missing dependency fails CI instead of working by accident on a developer machine.
-An integration job that runs the whole Compose stack is planned (Day 5, step 2).
+The README shows a CI status badge for `main`.
+
+### Integration test
+
+`scripts/integration_test.sh` builds and starts the whole stack as a separate Compose project
+(`syspulse-it`, its own containers and volume) and checks, step by step:
+
+1. `docker compose up -d --build --wait`: every healthcheck passes.
+2. Every agent's samples reach the database and the REST API (agent -> TCP -> ingest -> DB).
+3. `scripts/load_test.sh`: CPU load in agent-1 gives `cpu_high` for agent-1 only.
+4. A real stdio MCP client starts `mcp_server/server.py` and calls `compare_hosts`:
+   agent-1 is ranked first.
+
+On exit it removes the test stack (`down -v`); on failure it first prints the container logs.
+Locally, stop the development stack first (`docker compose stop`); its data is not touched.
 
 Lint locally (from the repo root): `server/.venv/bin/ruff check .`
