@@ -232,6 +232,8 @@ window" query. Tables are created with `create_all` at startup (no migrations ye
 | `host_silent` | no data for more than 30 seconds | background task, every 5 seconds |
 
 Rules are edge-triggered: one anomaly when a condition starts, not one per sample while it lasts.
+Known limits (flapping without hysteresis, false `host_silent` after the machine sleeps) are
+described in [decisions.md](decisions.md) and [mcp_demo.md](mcp_demo.md).
 
 ### REST API
 
@@ -326,7 +328,8 @@ docker compose down          # add -v to also delete the database
 
 `mcp_server/server.py` lets an LLM client (Claude Code) query SysPulse. It uses the official
 MCP Python SDK, `mcp` 2.3.0, where FastMCP is called `MCPServer`. It has its own venv and
-`requirements.txt`, separate from the server.
+`requirements.txt`, separate from the server. A recorded demo with the tool calls and the
+answer is in [mcp_demo.md](mcp_demo.md).
 
 ```mermaid
 flowchart LR

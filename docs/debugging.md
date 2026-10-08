@@ -171,6 +171,50 @@ aborting: temp-path '.' must be readable and writeable
 - To check the server without Claude Code, launch it exactly as `.mcp.json` says from the repo
   root with the SDK's client (`mcp.Client` + `StdioServerParameters`) and list the tools.
 
+## Server: false `host_silent` after the laptop slept
+
+- Symptom (found in the MCP demo): `host_silent` on agent-1 at 05:51, "No data for 19173 s"
+  (5.3 hours), although `docker compose ps` showed all containers up for 10 hours. The model
+  explained it as "the stack was off", which was wrong.
+- Diagnosis: look for gaps between consecutive samples of a host (via the API):
+
+  ```bash
+  curl -s "localhost:8000/hosts/agent-2/metrics?minutes=600" | python3 -c '
+  import json, sys
+  from datetime import datetime
+  prev = None
+  for s in json.load(sys.stdin):
+      t = datetime.fromisoformat(s["ts"])
+      if prev and (t - prev).total_seconds() > 60: print("gap:", prev, "->", t)
+      prev = t'
+  ```
+
+  All three agents had the same gaps (20:04 -> 00:31 -> 05:51): the laptop slept, so the WSL
+  VM was suspended, and the agents *and* the server were frozen together.
+- Why only agent-1: on wake-up, agent-2 and agent-3 sent a sample a few milliseconds before
+  the watcher's next round, agent-1 did not (a race).
+- Lesson: a monitor must be able to tell "the host was silent" from "I was not running".
+  Not fixed yet (see [decisions.md](decisions.md)).
+
+## Anomalies: `cpu_high` fires several times during one load
+
+- Symptom: one 2-minute load gave 4 `cpu_high` anomalies (05:59:36, 05:59:54, 06:00:12,
+  06:00:40), found with `curl -s "localhost:8000/anomalies?minutes=600"`.
+- Cause: the rule is edge-triggered without hysteresis. Samples under load fluctuate around
+  90-98% with occasional dips (59.9% once); every dip below 90% ends the event, and the next
+  3 high samples start a new one (flapping).
+- Not fixed yet (see [decisions.md](decisions.md)).
+
+## Tests: checking that the tests catch bugs
+
+- A passing test suite only proves something if it fails on wrong code. For the MCP tools,
+  two bugs were planted one at a time and the tests were run:
+  - `reverse=True` -> `reverse=False` in `rank_hosts`: `test_compare_hosts_ranks_by_average` failed.
+  - `minutes` not passed to the API in `get_host_metrics`:
+    `test_get_host_metrics_passes_host_and_minutes` failed.
+- Then `server.py` was restored (no diff). This is manual mutation testing; tools such as
+  `mutmut` automate it.
+
 ## GDB
 
 *(Day 6: breakpoints, `info threads`, `thread apply all bt`, planted bug.)*

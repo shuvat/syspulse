@@ -132,6 +132,13 @@
 - `host_silent` cannot be triggered by a sample, because silence means no samples arrive.
   A background task checks every 5 seconds. It records one anomaly per silence: it skips a
   host that already has a `host_silent` anomaly newer than its `last_seen`. No extra state column.
+- Known limits, found in the MCP demo ([mcp_demo.md](mcp_demo.md)), not fixed yet:
+  - No hysteresis: a short dip below 90% ends a CPU event, so one 2-minute load produced
+    4 `cpu_high` anomalies (flapping). Fix: end the event only after CPU stays below a lower
+    threshold (e.g. 80%) for several samples, or a cooldown per host.
+  - The silence watcher cannot tell "the host was silent" from "the monitor itself was
+    suspended" (laptop sleep froze the whole WSL VM): false `host_silent` after wake-up.
+    Fix: skip a round when the watcher's own previous run is much older than 5 seconds.
 
 ## Tests against a real PostgreSQL database
 - The code uses PostgreSQL-specific features (`ON CONFLICT`, `timestamptz`), so SQLite would
@@ -220,5 +227,25 @@
 - Error handling: expected failures raise `ToolError`, so the model sees the message and can
   recover. Any other exception reaches the model only as "Error executing tool" (no
   internal details leak).
-- Known limit: `mem_percent` is the same for all agents, because memory still comes from
-  `/proc/meminfo` (whole machine). The cgroup's `memory.current` would fix it, like CPU.
+- Known limits: `mem_percent` is the same for all agents, because memory still comes from
+  `/proc/meminfo` (whole machine); the cgroup's `memory.current` would fix it, like CPU.
+  `compare_hosts` ranks by the average over the window, which dilutes a load that started a
+  minute ago (seen in the demo: avg 4.6%, max 98.5%); ranking by a recent value would fit
+  "overloaded now" better.
+- Demo and what it revealed: [mcp_demo.md](mcp_demo.md). The model's explanation of an old
+  `host_silent` anomaly was a wrong guess: tool results are facts, the model's interpretation
+  is a hypothesis to check.
+
+## MCP tests: mock the REST API at the HTTP layer
+- The tests replace only the HTTP transport of the client (`httpx2.MockTransport`), not
+  `api_get` or the tools. All our code still runs: URLs, query parameters, status-code
+  handling. Mocking `api_get` would skip most of the logic under test.
+- No new mocking library: `MockTransport` ships with `httpx2`. `monkeypatch` swaps the
+  client for one test and restores it afterwards.
+- Tools are called through `mcp.call_tool`, the path a real client uses, so the SDK's
+  argument validation (from the type hints) is tested too, including "rejected before any
+  API call".
+- `call_tool` is async; each test runs it with `asyncio.run` instead of adding
+  `pytest-asyncio`.
+- Checked that the tests catch bugs by planting two (reversed sort, `minutes` not sent):
+  each one failed exactly the test meant to catch it (manual mutation testing).
