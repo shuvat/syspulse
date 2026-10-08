@@ -28,6 +28,14 @@ jobs:
         run: cmake --build agent/build -j "$(nproc)"
       - name: Test
         run: ctest --test-dir agent/build --output-on-failure
+      # The same tests under valgrind: any leak or invalid memory access fails the job.
+      # The build is Debug (the CMakeLists default), so reports show file and line.
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
+      - name: Test under valgrind
+        run: >-
+          valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes
+          --error-exitcode=1 agent/build/agent_tests
 
   server:
     name: Python server (pytest + PostgreSQL)

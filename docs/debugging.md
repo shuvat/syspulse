@@ -266,6 +266,84 @@ aborting: temp-path '.' must be readable and writeable
 
 *(Day 6: breakpoints, `info threads`, `thread apply all bt`, planted bug.)*
 
-## Valgrind
+## Valgrind (memory leaks and invalid memory access)
 
-*(Day 6: `valgrind --leak-check=full` on the agent.)*
+Valgrind's memcheck runs the program on a synthetic CPU and tracks every byte: allocated or
+not, initialized or not, freed or not. It needs no special build (unlike ASan or TSan), but
+a Debug build (`-g`) makes reports show file and line. Programs run about 20-50x slower.
+
+### The real agent
+
+Run for about 25 seconds against `nc` (the server's port 9000 is not published outside
+Compose), with the receiver restarted in the middle to cover the reconnect path, and Ctrl+C
+(SIGINT) at the end to cover the shutdown path:
+
+```bash
+# Terminal 1
+nc -lk 9000
+# Terminal 2 (from agent/)
+AGENT_NAME=agent-vg CPU_SOURCE=cgroup valgrind --leak-check=full --show-leak-kinds=all \
+    --track-origins=yes --error-exitcode=1 ./build/syspulse_agent
+# After ~10s: Ctrl+C nc, wait 5s, start it again; after ~10s more: Ctrl+C the agent.
+```
+
+Agent log: `connected`, `send failed, reconnecting`, `retrying in 1000 ms`, `retrying in
+2000 ms`, `connected`, `received SIGINT, shutting down`, `dropped samples: 0`. Valgrind:
+
+```
+HEAP SUMMARY:
+    in use at exit: 0 bytes in 0 blocks
+  total heap usage: 1,420 allocs, 1,420 frees, 624,258 bytes allocated
+All heap blocks were freed -- no leaks are possible
+ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+```
+
+Every allocation was freed, including the threads, the queue and the socket, so the graceful
+shutdown cleans up completely. No invalid reads/writes and no use of uninitialized values.
+
+### The unit tests
+
+```bash
+valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 \
+    ./build/agent_tests
+```
+
+They cover paths a normal run does not reach (malformed parser input, connection failures,
+the queue stress test). Result: 52 tests passed, 1,959 allocs / 1,959 frees, 0 errors, in
+about 4 seconds. This also runs in CI (the `cpp` job), so a future leak fails the build.
+
+### Reading a leak report: planted bug
+
+To check that valgrind really catches leaks, a 1 KB leak per sample was planted temporarily
+in the collector loop (`new char[1024]`, never deleted) and the collector test was run:
+
+```
+2,048 bytes in 2 blocks are definitely lost in loss record 1 of 1
+   at 0x48485C3: operator new[](unsigned long) (in .../vgpreload_memcheck-amd64-linux.so)
+   by 0x17069A: syspulse::run_collector(...) (collector.cpp:276)
+   by ...: std::thread::_Invoker<...>  ...
+   by ...: start_thread (pthread_create.c:447)
+```
+
+Exit code 1. The stack is read top-down: who allocated (`operator new[]`), from where
+(`collector.cpp:276`, our line), and in which thread (started by `std::thread`). 2 blocks =
+2 samples during the test. Then the line was removed (no diff left).
+
+Leak kinds in the summary:
+
+| Kind | Meaning |
+|---|---|
+| definitely lost | No pointer to the block remains: a real leak |
+| indirectly lost | Reachable only from a lost block (e.g. nodes of a lost list) |
+| possibly lost | Only a pointer into the middle of the block remains: suspicious |
+| still reachable | Still pointed to at exit, never freed: usually not a bug (e.g. global caches) |
+
+### Gotchas while scripting this
+
+- `cmd1 && cmd2 && ... && nc ... &`: the `&` sends the whole `&&` chain to the background,
+  so a variable set in that chain does not exist in the current shell. Paths built from it
+  became `/nc1.out` ("Permission denied").
+- The failed attempt left an `nc` running on port 9000. The next run's `nc` also bound to
+  the port (OpenBSD `nc` uses `SO_REUSEPORT`), and the agent stayed connected to the old one,
+  so killing "our" `nc` tested no reconnect. Found because the agent log had no
+  `send failed`. Check before a test: `pgrep -a nc`, `ss -ltn 'sport = :9000'`.

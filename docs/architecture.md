@@ -387,7 +387,7 @@ parallel, so a failure shows which part broke.
 
 ```mermaid
 flowchart LR
-    PUSH[push / pull request] --> CPP[cpp<br/>cmake build + ctest]
+    PUSH[push / pull request] --> CPP[cpp<br/>cmake build + ctest + valgrind]
     PUSH --> SRV[server<br/>pytest + PostgreSQL service]
     PUSH --> MCP[mcp-server<br/>pytest, mocked API]
     PUSH --> DSH[dashboard<br/>pytest + AppTest]
@@ -397,7 +397,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| `cpp` | The agent builds on a clean Ubuntu 24.04 runner and all GoogleTest tests pass |
+| `cpp` | The agent builds on a clean Ubuntu 24.04 runner and all GoogleTest tests pass, also under valgrind (no leaks, no invalid memory access) |
 | `server` | Server tests against a real `postgres:17` service container (`TEST_DATABASE_URL`) |
 | `mcp-server` | MCP tool tests; the REST API is mocked, so no services are needed |
 | `dashboard` | Dashboard tests: pure data functions and the whole app with Streamlit's `AppTest` |

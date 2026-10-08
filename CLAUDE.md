@@ -121,7 +121,7 @@ docker-compose.yml, .github/workflows/ci.yml, README.md
 
 ### Day 6 - Dashboard, debugging, README
 - [x] Streamlit dashboard added to compose
-- [ ] valgrind --leak-check=full on agent -> no leaks
+- [x] valgrind --leak-check=full on agent -> no leaks
 - [ ] GDB session (breakpoints, info threads, backtrace, planted bug) -> docs/debugging.md
 - [ ] README: one-line pitch, demo video, diagram, tech stack, 3-command quick start
 
@@ -157,7 +157,10 @@ Day 6 in progress: Streamlit dashboard (`dashboard/app.py` + `data.py`) in compo
 http://localhost:8501; 11 pytest tests (pure functions + AppTest) pass; CI has a `dashboard` job
 (integration now needs it too). Verified against the real API under load; integration test passes.
 Not pushed yet.
-Next: Day 6, step 2 - valgrind --leak-check=full on the agent.
+Dashboard committed (331fc85). Valgrind: real agent (incl. reconnect + SIGINT) and agent_tests
+are clean (0 bytes in use at exit, 0 errors); planted leak was caught (collector.cpp line, exit 1)
+and removed. CI `cpp` job now also runs agent_tests under valgrind (not pushed yet).
+Next: Day 6, step 3 - GDB session (breakpoints, info threads, backtrace, planted bug).
 
 ### Agent notes (decisions made during Day 1)
 - Parsers return `std::optional` (nullopt on malformed input) instead of throwing.
@@ -170,6 +173,9 @@ Next: Day 6, step 2 - valgrind --leak-check=full on the agent.
 - Dependencies (pinned, FetchContent): nlohmann/json v3.12.0, GoogleTest v1.17.0 (gmock off).
 - `gtest_discover_tests` uses `DISCOVERY_MODE PRE_TEST`.
 - TSan on this WSL kernel needs ASLR off: `setarch -R ./build-tsan/agent_tests`.
+- Valgrind: `valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1
+  ./build/agent_tests` (~4s, clean). `build/` is Debug by default (`-g`). For the real agent,
+  run against `nc -lk 9000`; check no stray `nc` first (`pgrep -a nc`, SO_REUSEPORT).
 - `CPU_SOURCE=proc|cgroup` (default proc). cgroup mode reads `/sys/fs/cgroup/cpu.stat`
   (`usage_usec`) and divides by elapsed `steady_clock` time x CPU capacity. Capacity = limit from
   `/sys/fs/cgroup/cpu.max` (read every sample; "max" or missing file = no limit), capped at

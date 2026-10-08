@@ -336,3 +336,14 @@
   `--browser.gatherUsageStats=false` (no usage telemetry sent out).
 - Published only on `127.0.0.1:8501`. The dashboard has no authentication; exposing it beyond
   localhost would need a reverse proxy with auth.
+
+## Memory checking: valgrind in CI
+- The agent is a long-running daemon: a small leak per sample (every 2 seconds) would grow
+  for days. Valgrind on the real agent (with reconnect and shutdown) and on the unit tests
+  found 0 leaks and 0 errors (see [debugging.md](debugging.md)).
+- CI runs `agent_tests` under valgrind with `--error-exitcode=1` in the `cpp` job, so a new
+  leak or invalid access fails the build. Cost: installing valgrind on the runner and about
+  half a minute more; the tests themselves take about 4 seconds under valgrind.
+- Valgrind instead of AddressSanitizer: no special build, and the same Debug binary is used.
+  ASan is faster and also finds stack and global buffer overflows, but needs its own build
+  (and cannot be combined with TSan in one build). TSan was already used for data races.
